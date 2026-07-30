@@ -1,0 +1,41 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# Tauri
+src-tauri/target/
+.env.local
+src-tauri/aurascribe.db
+src-tauri/aurascribe.db-shm
+src-tauri/aurascribe.db-wal
+
+# Models
+**/models/*.bin
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+out/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.sln
+*.user
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~.nib

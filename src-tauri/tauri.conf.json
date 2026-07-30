@@ -1,0 +1,108 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AuraScribe",
+  "version": "1.0.0",
+  "identifier": "dev.aurascribe.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:1420",
+    "distDir": "../out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AuraScribe",
+        "width": 480,
+        "height": 720,
+        "minWidth": 400,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "visible": false,
+        "center": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": true,
+        "hiddenTitle": true
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/tray-icon.png",
+      "iconAsTemplate": true,
+      "menu": [
+        { "id": "show", "text": "Show AuraScribe", "enabled": true },
+        { "id": "dictate", "text": "Start Dictation", "enabled": true },
+        { "type": "separator" },
+        { "id": "settings", "text": "Settings", "enabled": true },
+        { "type": "separator" },
+        { "id": "quit", "text": "Quit", "enabled": true }
+      ]
+    },
+    "security": {
+      "csp": "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://openrouter.ai;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "wix": {
+        "language": "en-US",
+        "template": "wix/template.wxs"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perUser",
+        "allowToChangeInstallPath": true
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "providerShortName": null,
+      "entitlements": "entitlements.plist",
+      "info": {
+        "NSMicrophoneUsageDescription": "AuraScribe needs microphone access for voice dictation",
+        "NSAccessibilityUsageDescription": "AuraScribe needs accessibility access to insert text into other applications",
+        "NSAppleEventsUsageDescription": "AuraScribe needs to communicate with other apps for text insertion"
+      }
+    },
+    "linux": {
+      "appImage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": ["libasound2", "libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
+  },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:aurascribe.db"]
+    },
+    "store": {
+      "filename": "settings.json"
+    },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/aurascribe/aurascribe/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": ""
+    }
+  }
+}
