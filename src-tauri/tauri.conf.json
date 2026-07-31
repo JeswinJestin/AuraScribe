@@ -21,10 +21,10 @@
         "fullscreen": false,
         "decorations": true,
         "transparent": false,
-        "visible": false,
+        "visible": true,
         "center": true,
         "alwaysOnTop": false,
-        "skipTaskbar": true
+        "skipTaskbar": false
       }
     ],
     "trayIcon": {

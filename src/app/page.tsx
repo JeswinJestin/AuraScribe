@@ -1,10 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import React from 'react'
-import { Mic, MicOff, Settings, Shield, Download, Github, ExternalLink, Loader2, CheckCircle, AlertCircle, Info, Sparkles, Zap, Lock, Globe, Sun, Moon, Eye, EyeOff } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import {
+  Mic, MicOff, Settings, Shield, Download, Github, ExternalLink,
+  Loader2, CheckCircle, AlertCircle, Sparkles, Zap, Lock, Globe,
+  Sun, Moon, Eye, EyeOff, Keyboard, ChevronRight
+} from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen, emit } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { isTauri } from '@tauri-apps/api/core'
 
 interface Status {
@@ -21,8 +24,8 @@ interface SettingsData {
   hotkey: string
   hotkeyMode: 'press-hold' | 'toggle'
   whisperModel: string
-  openRouterKey: string
-  openRouterModel: string
+  openrouterKey: string
+  openrouterModel: string
   aiCleanupEnabled: boolean
   autoPunctuation: boolean
   language: string
@@ -30,19 +33,12 @@ interface SettingsData {
   startAtLogin: boolean
 }
 
-const WHISPER_MODELS = [
-  { id: 'tiny.en', size: '39 MB', speed: 'Fastest', quality: 'Good', recommended: false },
-  { id: 'base.en', size: '74 MB', speed: 'Fast', quality: 'Better', recommended: true },
-  { id: 'small.en', size: '244 MB', speed: 'Balanced', quality: 'Great', recommended: false },
-  { id: 'medium', size: '769 MB', speed: 'Slow', quality: 'Excellent', recommended: false },
-]
-
 const OPENROUTER_MODELS = [
-  { id: 'nvidia/nemotron-3-ultra', name: 'Nemotron 3 Ultra (Free)', free: true },
-  { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B (Free)', free: true },
-  { id: 'google/gemma-2-9b-it:free', name: 'Gemma 2 9B (Free)', free: true },
-  { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B (Free)', free: true },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (Paid)', free: false },
+  { id: 'nvidia/nemotron-3-ultra', name: 'Nemotron 3 Ultra', free: true },
+  { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B', free: true },
+  { id: 'google/gemma-2-9b-it:free', name: 'Gemma 2 9B', free: true },
+  { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B', free: true },
+  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', free: false },
 ]
 
 export default function Home() {
@@ -52,513 +48,446 @@ export default function Home() {
     isModelLoaded: false,
     currentText: '',
     lastError: null,
-    hotkeyMode: 'press-hold',
+    hotkeyMode: 'toggle',
     aiCleanupEnabled: false,
   })
   const [settings, setSettings] = useState<SettingsData>({
-    hotkey: 'Ctrl+Space',
-    hotkeyMode: 'press-hold',
+    hotkey: 'Ctrl+Alt',
+    hotkeyMode: 'toggle',
     whisperModel: 'base.en',
-    openRouterKey: '',
-    openRouterModel: 'nvidia/nemotron-3-ultra',
+    openrouterKey: '',
+    openrouterModel: 'nvidia/nemotron-3-ultra',
     aiCleanupEnabled: false,
     autoPunctuation: true,
     language: 'en',
-    theme: 'system',
+    theme: 'dark',
     startAtLogin: false,
   })
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'about'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'home' | 'settings'>('home')
   const [isLoading, setIsLoading] = useState(true)
   const [showKey, setShowKey] = useState(false)
+  const [tauriAvailable, setTauriAvailable] = useState(false)
 
   useEffect(() => {
-    let unlistenStatus: () => void
-    let unlistenSettings: () => void
+    let unlistenStatus: (() => void) | null = null
+    let unlistenSettings: (() => void) | null = null
 
     const init = async () => {
       try {
-        const tauriAvailable = await isTauri()
-        if (tauriAvailable) {
+        const available = await isTauri()
+        setTauriAvailable(available)
+        if (available) {
           const loadedSettings = await invoke<SettingsData>('get_settings')
           setSettings(loadedSettings)
           const loadedStatus = await invoke<Status>('get_status')
           setStatus(loadedStatus)
 
-          // Set up event listeners
           unlistenStatus = await listen<Status>('status-changed', (e) => setStatus(e.payload))
           unlistenSettings = await listen<SettingsData>('settings-changed', (e) => setSettings(e.payload))
         }
       } catch (e) {
-        console.error('Failed to load initial state:', e)
+        console.error('Init error:', e)
       } finally {
         setIsLoading(false)
       }
     }
-
     init()
 
     return () => {
-      if (unlistenStatus) unlistenStatus()
-      if (unlistenSettings) unlistenSettings()
+      unlistenStatus?.()
+      unlistenSettings?.()
     }
   }, [])
 
-  const handleSaveSettings = async (newSettings: Partial<SettingsData>) => {
+  const saveSettings = useCallback(async (patch: Partial<SettingsData>) => {
+    const updated = { ...settings, ...patch }
+    setSettings(updated)
+    if (tauriAvailable) {
+      try {
+        await invoke('save_settings', { settings: updated })
+      } catch (e) {
+        console.error('Save settings error:', e)
+      }
+    }
+  }, [settings, tauriAvailable])
+
+  const handleToggleRecording = async () => {
+    if (!tauriAvailable) return
     try {
-      const updated = { ...settings, ...newSettings }
-      await invoke('save_settings', { settings: updated })
-      setSettings(updated)
+      if (status.isRecording) {
+        await invoke('stop_recording')
+      } else {
+        await invoke('start_recording')
+      }
     } catch (e) {
-      console.error('Failed to save settings:', e)
+      console.error('Recording error:', e)
     }
   }
 
-  const handleStartRecording = async () => {
+  const handleLoadModel = async () => {
+    if (!tauriAvailable) return
     try {
-      await invoke('start_recording')
+      await invoke('load_model', { modelId: settings.whisperModel })
     } catch (e) {
-      console.error('Failed to start recording:', e)
+      console.error('Load model error:', e)
     }
   }
 
-  const handleStopRecording = async () => {
-    try {
-      await invoke('stop_recording')
-    } catch (e) {
-      console.error('Failed to stop recording:', e)
+  useEffect(() => {
+    if (settings.theme === 'dark') {
+      document.documentElement.classList.add('dark')
+    } else if (settings.theme === 'light') {
+      document.documentElement.classList.remove('dark')
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      document.documentElement.classList.toggle('dark', prefersDark)
     }
-  }
-
-  const handleDownloadModel = async (modelId: string) => {
-    try {
-      await invoke('download_model', { modelId })
-    } catch (e) {
-      console.error('Failed to download model:', e)
-    }
-  }
-
-  const formatHotkey = (hotkey: string) => {
-    return hotkey
-      .split('+')
-      .map((k) => k.charAt(0).toUpperCase() + k.slice(1))
-      .join(' + ')
-  }
+  }, [settings.theme])
 
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
-          <p className="text-muted-foreground">Loading AuraScribe...</p>
+          <Loader2 className="h-10 w-10 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading AuraScribe...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center">
-                <Mic className="w-5 h-5 text-white" />
-              </div>
+    <div className="min-h-screen bg-background flex flex-col">
+      <header className="sticky top-0 z-50 glass-strong border-b border-border/50">
+        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="relative w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center shadow-lg shadow-primary/20">
+              <Mic className="w-4 h-4 text-white" />
               {status.isRecording && (
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+                <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
               )}
             </div>
-            <span className="font-bold text-xl">AuraScribe</span>
+            <span className="font-bold text-lg tracking-tight">AuraScribe</span>
           </div>
 
-          <nav className="flex items-center gap-1 bg-muted/50 rounded-lg p-1">
-            {(['dashboard', 'settings', 'about'] as const).map((tab) => (
+          <nav className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5">
+            {(['home', 'settings'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${
                   activeTab === tab
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {tab === 'home' ? 'Home' : 'Settings'}
               </button>
             ))}
           </nav>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             <a
-              href="https://github.com/aurascribe/aurascribe"
+              href="https://github.com/JeswinJestin/AuraScribe"
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 rounded-lg hover:bg-muted transition-colors"
+              className="p-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
               title="GitHub"
             >
-              <Github className="w-5 h-5" />
+              <Github className="w-4 h-4" />
             </a>
             <button
-              onClick={() => handleSaveSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })}
-              className="p-2 rounded-lg hover:bg-muted transition-colors"
+              onClick={() => saveSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })}
+              className="p-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
               title="Toggle theme"
             >
-              {settings.theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              {settings.theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
-        {activeTab === 'dashboard' && (
-          <DashboardView
+      <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-6">
+        {activeTab === 'home' && (
+          <HomeView
             status={status}
             settings={settings}
-            onStartRecording={handleStartRecording}
-            onStopRecording={handleStopRecording}
-            onSaveSettings={handleSaveSettings}
-            formatHotkey={formatHotkey}
+            onToggleRecording={handleToggleRecording}
+            onLoadModel={handleLoadModel}
+            onSaveSettings={saveSettings}
           />
         )}
-
         {activeTab === 'settings' && (
           <SettingsView
             settings={settings}
-            onSaveSettings={handleSaveSettings}
-            onDownloadModel={handleDownloadModel}
+            onSaveSettings={saveSettings}
             showKey={showKey}
             setShowKey={setShowKey}
           />
         )}
-
-        {activeTab === 'about' && <AboutView />}
       </main>
+
+      <footer className="border-t border-border/50 py-3">
+        <div className="max-w-4xl mx-auto px-4 flex items-center justify-between text-xs text-muted-foreground">
+          <span>AuraScribe v1.0.0</span>
+          <span>MIT License</span>
+        </div>
+      </footer>
     </div>
   )
 }
 
-// Dashboard View Component
-function DashboardView({
+function HomeView({
   status,
   settings,
-  onStartRecording,
-  onStopRecording,
+  onToggleRecording,
+  onLoadModel,
   onSaveSettings,
-  formatHotkey,
 }: {
   status: Status
   settings: SettingsData
-  onStartRecording: () => void
-  onStopRecording: () => void
+  onToggleRecording: () => void
+  onLoadModel: () => void
   onSaveSettings: (s: Partial<SettingsData>) => void
-  formatHotkey: (h: string) => string
 }) {
-  const [recentTranscripts, setRecentTranscripts] = useState<string[]>([])
+  const getMicButtonState = () => {
+    if (status.isRecording) return { color: 'bg-red-500 hover:bg-red-600', ring: 'ring-red-500/30', label: 'Stop & Insert' }
+    if (status.isProcessing) return { color: 'bg-yellow-500 hover:bg-yellow-600', ring: 'ring-yellow-500/30', label: 'Processing...' }
+    return { color: 'bg-primary hover:bg-primary/90', ring: 'ring-primary/30', label: 'Start Dictation' }
+  }
+
+  const micState = getMicButtonState()
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      {/* Status Card */}
-      <div className="card-base overflow-hidden">
-        <div className={`p-6 flex items-center justify-between gap-4 ${status.isRecording ? 'bg-primary/10 border-l-4 border-primary' : ''}`}>
-          <div className="flex items-center gap-4">
-            <div className={`relative w-16 h-16 rounded-2xl flex items-center justify-center ${
-              status.isRecording
-                ? 'bg-primary/20 animate-pulse'
-                : status.isProcessing
-                ? 'bg-yellow-500/20'
-                : status.isModelLoaded
-                ? 'bg-green-500/20'
-                : 'bg-muted'
-            }`}>
-              {status.isRecording ? (
-                <Mic className="w-8 h-8 text-primary" />
-              ) : status.isProcessing ? (
-                <Loader2 className="w-8 h-8 text-yellow-500 animate-spin" />
-              ) : status.isModelLoaded ? (
-                <CheckCircle className="w-8 h-8 text-green-500" />
-              ) : (
-                <MicOff className="w-8 h-8 text-muted-foreground" />
-              )}
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold">
-                {status.isRecording
-                  ? 'Listening...'
-                  : status.isProcessing
-                  ? 'Processing...'
-                  : status.isModelLoaded
-                  ? 'Ready to Dictate'
-                  : 'Model Not Loaded'}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {status.isRecording
-                  ? `Speak now — release ${formatHotkey(settings.hotkey)} to insert`
-                  : status.isProcessing
-                  ? 'Transcribing and cleaning up...'
-                  : status.isModelLoaded
-                  ? `Press and hold ${formatHotkey(settings.hotkey)} to start (${settings.hotkeyMode === 'press-hold' ? 'hold' : 'tap twice'})`
-                  : 'Click "Load Model" to download Whisper model'}
-              </p>
-            </div>
-          </div>
+    <div className="space-y-5">
+      <div className="text-center space-y-1">
+        <h1 className="text-2xl font-bold tracking-tight">Voice Dictation</h1>
+        <p className="text-sm text-muted-foreground">
+          Press <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono font-medium">{settings.hotkey.replace('+', ' + ')}</kbd> or click below to dictate
+        </p>
+      </div>
 
-          <div className="flex items-center gap-2">
-            {!status.isModelLoaded && (
-              <button
-                onClick={() => invoke('load_model', { modelId: settings.whisperModel })}
-                className="btn-primary"
-                disabled={status.isProcessing}
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Load Model
-              </button>
-            )}
-            {status.isModelLoaded && !status.isRecording && !status.isProcessing && (
-              <button
-                onClick={onStartRecording}
-                className="btn-primary bg-green-600 hover:bg-green-700"
-              >
-                <Mic className="w-4 h-4 mr-2" />
-                Start Dictation
-              </button>
-            )}
+      <div className="card p-6">
+        <div className="flex flex-col items-center gap-5">
+          <div className="relative">
             {status.isRecording && (
-              <button
-                onClick={onStopRecording}
-                className="btn-primary bg-red-600 hover:bg-red-700"
-              >
-                <MicOff className="w-4 h-4 mr-2" />
-                Stop & Insert
-              </button>
+              <>
+                <div className="absolute inset-0 rounded-full bg-red-500/20 pulse-ring" />
+                <div className="absolute inset-0 rounded-full bg-red-500/10 pulse-ring" style={{ animationDelay: '0.5s' }} />
+              </>
             )}
-            {status.isProcessing && (
-              <button className="btn-primary" disabled>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Processing...
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Live Transcript Preview */}
-        {status.currentText && (
-          <div className="card-base p-6 animate-slide-up">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-medium">Live Transcript</h3>
-              {status.aiCleanupEnabled && (
-                <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-1 rounded-full">
-                  <Sparkles className="w-3 h-3" />
-                  AI Enhanced
-                </span>
+            <button
+              onClick={onToggleRecording}
+              disabled={status.isProcessing || (!status.isModelLoaded && !status.isRecording)}
+              className={`relative w-24 h-24 rounded-full ${micState.color} text-white shadow-xl ${micState.ring} ring-4 transition-all duration-200 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:scale-105 active:scale-95`}
+            >
+              {status.isProcessing ? (
+                <Loader2 className="w-10 h-10 animate-spin" />
+              ) : status.isRecording ? (
+                <MicOff className="w-10 h-10" />
+              ) : (
+                <Mic className="w-10 h-10" />
               )}
-            </div>
-            <div className="p-4 bg-muted/50 rounded-lg min-h-[80px] font-mono text-sm whitespace-pre-wrap">
-              {status.currentText}
-            </div>
+            </button>
           </div>
-        )}
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard
-            icon={<Shield className="w-5 h-5" />}
-            title="Privacy First"
-            value="100% Local"
-            desc="Audio never leaves your device"
-          />
-          <StatCard
-            icon={<Zap className="w-5 h-5" />}
-            title="Latency"
-            value="~500ms"
-            desc="Speak → Text appears"
-          />
-          <StatCard
-            icon={<Lock className="w-5 h-5" />}
-            title="Encrypted"
-            value="AES-256"
-            desc="Settings & dictionary encrypted"
-          />
-        </div>
-
-        {/* Hotkey Guide */}
-        <div className="card-base p-6">
-          <h3 className="font-semibold mb-4">Hotkey Guide</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <HotkeyCard
-              mode="press-hold"
-              active={settings.hotkeyMode === 'press-hold'}
-              hotkey={settings.hotkey}
-              onClick={() => onSaveSettings({ hotkeyMode: 'press-hold' })}
-            />
-            <HotkeyCard
-              mode="toggle"
-              active={settings.hotkeyMode === 'toggle'}
-              hotkey={settings.hotkey}
-              onClick={() => onSaveSettings({ hotkeyMode: 'toggle' })}
-            />
+          <div className="text-center">
+            <p className="font-semibold text-lg">
+              {status.isRecording
+                ? 'Listening...'
+                : status.isProcessing
+                ? 'Processing audio...'
+                : status.isModelLoaded
+                ? 'Ready'
+                : 'Setup Required'}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {status.isRecording
+                ? 'Speak clearly, then click to stop and insert text'
+                : status.isProcessing
+                ? 'Transcribing your speech...'
+                : status.isModelLoaded
+                ? `Press the mic or ${settings.hotkey.replace('+', ' + ')} to start`
+                : 'Load a model below to get started'}
+            </p>
           </div>
-        </div>
 
-        {/* Error Display */}
-        {status.lastError && (
-          <div className="card-base border-destructive/50 p-4 bg-destructive/10">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-destructive mt-0.5" />
-              <div>
-                <p className="font-medium text-destructive">Error</p>
-                <p className="text-sm text-muted-foreground mt-1">{status.lastError}</p>
+          {status.lastError && (
+            <div className="w-full p-3 bg-destructive/10 border border-destructive/20 rounded-xl flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+              <p className="text-sm text-destructive">{status.lastError}</p>
+            </div>
+          )}
+
+          {status.currentText && (
+            <div className="w-full animate-slide-up">
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-sm font-medium text-muted-foreground">Last Transcript</h3>
+                {status.aiCleanupEnabled && (
+                  <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                    <Sparkles className="w-3 h-3" /> AI Enhanced
+                  </span>
+                )}
+              </div>
+              <div className="p-4 bg-muted/50 rounded-xl min-h-[60px] font-mono text-sm whitespace-pre-wrap leading-relaxed">
+                {status.currentText}
               </div>
             </div>
+          )}
+        </div>
+      </div>
+
+      {!status.isModelLoaded && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold">Load Whisper Model</h3>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Choose a model size for transcription
+              </p>
+            </div>
+            <button onClick={onLoadModel} className="btn-primary">
+              <Download className="w-4 h-4" />
+              Load
+            </button>
           </div>
-        )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-3">
+        <div className="card p-4 text-center">
+          <Shield className="w-5 h-5 text-primary mx-auto mb-2" />
+          <p className="text-sm font-semibold">100% Local</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Audio on-device</p>
+        </div>
+        <div className="card p-4 text-center">
+          <Zap className="w-5 h-5 text-yellow-500 mx-auto mb-2" />
+          <p className="text-sm font-semibold">Fast</p>
+          <p className="text-xs text-muted-foreground mt-0.5">API transcription</p>
+        </div>
+        <div className="card p-4 text-center">
+          <Lock className="w-5 h-5 text-green-500 mx-auto mb-2" />
+          <p className="text-sm font-semibold">Encrypted</p>
+          <p className="text-xs text-muted-foreground mt-0.5">AES-256 keys</p>
+        </div>
+      </div>
+
+      <div className="card p-5">
+        <h3 className="font-semibold mb-3">Hotkey Mode</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => onSaveSettings({ hotkeyMode: 'toggle' })}
+            className={`p-3 rounded-xl border-2 text-left transition-all ${
+              settings.hotkeyMode === 'toggle'
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:border-primary/50'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-medium text-sm">Toggle</span>
+              {settings.hotkeyMode === 'toggle' && <CheckCircle className="w-4 h-4 text-primary" />}
+            </div>
+            <p className="text-xs text-muted-foreground">Press to start, press again to stop</p>
+          </button>
+          <button
+            onClick={() => onSaveSettings({ hotkeyMode: 'press-hold' })}
+            className={`p-3 rounded-xl border-2 text-left transition-all ${
+              settings.hotkeyMode === 'press-hold'
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:border-primary/50'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-medium text-sm">Hold</span>
+              {settings.hotkeyMode === 'press-hold' && <CheckCircle className="w-4 h-4 text-primary" />}
+            </div>
+            <p className="text-xs text-muted-foreground">Hold to speak, release to insert</p>
+          </button>
+        </div>
       </div>
     </div>
   )
 }
 
-function StatCard({ icon, title, value, desc }: { icon: React.ReactNode; title: string; value: string; desc: string }) {
-  return (
-    <div className="card-base p-5">
-      <div className="flex items-center gap-3 mb-2">
-        <div className="p-2 bg-primary/10 rounded-lg text-primary">{icon}</div>
-        <h4 className="font-medium">{title}</h4>
-      </div>
-      <p className="text-2xl font-bold">{value}</p>
-      <p className="text-sm text-muted-foreground mt-1">{desc}</p>
-    </div>
-  )
-}
-
-function HotkeyCard({ mode, active, hotkey, onClick }: { mode: 'press-hold' | 'toggle'; active: boolean; hotkey: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`card-base p-4 text-left transition-all ${
-        active ? 'border-primary bg-primary/5' : 'hover:border-primary/50'
-      }`}
-    >
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-medium capitalize">{mode.replace('-', ' ')}</span>
-        {active && <CheckCircle className="w-5 h-5 text-primary" />}
-      </div>
-      <p className="text-sm text-muted-foreground mb-3">
-        {mode === 'press-hold' ? 'Hold to speak, release to insert' : 'Tap to start, tap again to stop'}
-      </p>
-      <div className="flex items-center gap-2 text-sm font-mono bg-muted px-2 py-1 rounded">
-        {hotkey.split('+').map((k, i) => (
-          <React.Fragment key={i}>
-            <kbd className="px-1.5 py-0.5 bg-background rounded text-xs">{k.charAt(0).toUpperCase() + k.slice(1)}</kbd>
-            {i < hotkey.split('+').length - 1 && <span>+</span>}
-          </React.Fragment>
-        ))}
-      </div>
-    </button>
-  )
-}
-
-// Settings View Component
 function SettingsView({
   settings,
   onSaveSettings,
-  onDownloadModel,
   showKey,
   setShowKey,
 }: {
   settings: SettingsData
   onSaveSettings: (s: Partial<SettingsData>) => void
-  onDownloadModel: (modelId: string) => void
   showKey: boolean
   setShowKey: (show: boolean) => void
 }) {
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-muted-foreground">Configure AuraScribe to match your workflow</p>
+        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+        <p className="text-sm text-muted-foreground mt-1">Configure AuraScribe to your workflow</p>
       </div>
 
-      {/* Hotkey Settings */}
-      <section className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Zap className="w-5 h-5" />
-          Hotkey
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <section className="card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Keyboard className="w-4 h-4 text-primary" />
+          <h2 className="font-semibold">Hotkey</h2>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Hotkey Combination</label>
-            <div className="input-field bg-muted font-mono text-center" style={{ userSelect: 'all' }}>
+            <label className="block text-sm font-medium mb-1.5">Combination</label>
+            <div className="input bg-muted font-mono text-center text-sm" style={{ userSelect: 'all' }}>
               {settings.hotkey}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Click to record new hotkey (coming soon)</p>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Mode</label>
+            <label className="block text-sm font-medium mb-1.5">Mode</label>
             <select
               value={settings.hotkeyMode}
               onChange={(e) => onSaveSettings({ hotkeyMode: e.target.value as 'press-hold' | 'toggle' })}
-              className="input-field"
+              className="input text-sm"
             >
-              <option value="press-hold">Press & Hold — Hold to speak, release to insert</option>
-              <option value="toggle">Toggle — Tap to start, tap again to stop</option>
+              <option value="press-hold">Press & Hold</option>
+              <option value="toggle">Toggle (tap on/off)</option>
             </select>
           </div>
         </div>
       </section>
 
-      {/* Model Settings */}
-      <section className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Download className="w-5 h-5" />
-          Whisper Model
-        </h2>
-        <p className="text-sm text-muted-foreground">Models download once and run entirely offline</p>
-        <div className="space-y-2">
-          {WHISPER_MODELS.map((model) => (
-            <ModelCard
-              key={model.id}
-              model={model}
-              selected={settings.whisperModel === model.id}
-              onSelect={() => onSaveSettings({ whisperModel: model.id })}
-              onDownload={() => onDownloadModel(model.id)}
-            />
-          ))}
+      <section className="card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-primary" />
+          <h2 className="font-semibold">AI Cleanup</h2>
         </div>
-      </section>
-
-      {/* AI Cleanup Settings */}
-      <section className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Sparkles className="w-5 h-5" />
-          AI Cleanup (Optional)
-        </h2>
         <p className="text-sm text-muted-foreground">
-          Uses OpenRouter free models. Your API key is encrypted locally. Audio never leaves your device.
+          Polish your transcribed text with AI — fix grammar, punctuation, and remove filler words.
         </p>
 
-        <div className="flex items-center gap-4">
-          <input
-            type="checkbox"
-            id="ai-cleanup"
-            checked={settings.aiCleanupEnabled}
-            onChange={(e) => onSaveSettings({ aiCleanupEnabled: e.target.checked })}
-            className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary"
-          />
-          <label htmlFor="ai-cleanup" className="font-medium cursor-pointer">
-            Enable AI-powered grammar, punctuation & filler removal
-          </label>
-        </div>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <div
+            className={`relative w-10 h-6 rounded-full transition-colors ${
+              settings.aiCleanupEnabled ? 'bg-primary' : 'bg-muted'
+            }`}
+            onClick={() => onSaveSettings({ aiCleanupEnabled: !settings.aiCleanupEnabled })}
+          >
+            <div
+              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                settings.aiCleanupEnabled ? 'translate-x-4' : ''
+              }`}
+            />
+          </div>
+          <span className="text-sm font-medium">Enable AI cleanup</span>
+        </label>
 
         {settings.aiCleanupEnabled && (
-          <div className="space-y-4 pl-10 border-l-2 border-primary/20">
+          <div className="space-y-4 pl-0 border-l-2 border-primary/20 pl-4">
             <div>
-              <label className="block text-sm font-medium mb-1">OpenRouter API Key</label>
+              <label className="block text-sm font-medium mb-1.5">OpenRouter API Key</label>
               <div className="relative">
                 <input
                   type={showKey ? 'text' : 'password'}
-                  value={settings.openRouterKey}
-                  onChange={(e) => onSaveSettings({ openRouterKey: e.target.value })}
+                  value={settings.openrouterKey}
+                  onChange={(e) => onSaveSettings({ openrouterKey: e.target.value })}
                   placeholder="sk-or-v1-..."
-                  className="input-field pr-10"
+                  className="input pr-10 text-sm"
                 />
                 <button
                   onClick={() => setShowKey(!showKey)}
@@ -568,85 +497,106 @@ function SettingsView({
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Get a free key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" className="underline">openrouter.ai/keys</a>
+                Free key at{' '}
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" className="underline text-primary">
+                  openrouter.ai/keys
+                </a>
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Model</label>
+              <label className="block text-sm font-medium mb-1.5">Model</label>
               <select
-                value={settings.openRouterModel}
-                onChange={(e) => onSaveSettings({ openRouterModel: e.target.value })}
-                className="input-field"
+                value={settings.openrouterModel}
+                onChange={(e) => onSaveSettings({ openrouterModel: e.target.value })}
+                className="input text-sm"
               >
                 {OPENROUTER_MODELS.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name} {m.free ? '✓ Free' : '💰 Paid'}
+                    {m.name} {m.free ? '(Free)' : '(Paid)'}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settings.autoPunctuation}
-                  onChange={(e) => onSaveSettings({ autoPunctuation: e.target.checked })}
-                  className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary"
-                />
-                <span>Auto punctuation & capitalization</span>
-              </label>
-            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.autoPunctuation}
+                onChange={(e) => onSaveSettings({ autoPunctuation: e.target.checked })}
+                className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary"
+              />
+              <span className="text-sm">Auto punctuation & capitalization</span>
+            </label>
           </div>
         )}
       </section>
 
-      {/* Appearance */}
-      <section className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Globe className="w-5 h-5" />
-          Appearance & Behavior
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Theme</label>
-            <select
-              value={settings.theme}
-              onChange={(e) => onSaveSettings({ theme: e.target.value as 'light' | 'dark' | 'system' })}
-              className="input-field"
+      <section className="card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Globe className="w-4 h-4 text-primary" />
+          <h2 className="font-semibold">General</h2>
+        </div>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Language</label>
+              <select
+                value={settings.language}
+                onChange={(e) => onSaveSettings({ language: e.target.value })}
+                className="input text-sm"
+              >
+                <option value="en">English</option>
+                <option value="auto">Auto-detect</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="ja">Japanese</option>
+                <option value="zh">Chinese</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Theme</label>
+              <select
+                value={settings.theme}
+                onChange={(e) => onSaveSettings({ theme: e.target.value as 'light' | 'dark' | 'system' })}
+                className="input text-sm"
+              >
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <div
+              className={`relative w-10 h-6 rounded-full transition-colors ${
+                settings.startAtLogin ? 'bg-primary' : 'bg-muted'
+              }`}
+              onClick={() => onSaveSettings({ startAtLogin: !settings.startAtLogin })}
             >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </div>
-          <div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={settings.startAtLogin}
-                onChange={(e) => onSaveSettings({ startAtLogin: e.target.checked })}
-                className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary"
+              <div
+                className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  settings.startAtLogin ? 'translate-x-4' : ''
+                }`}
               />
-              <span>Start at login</span>
-            </label>
-          </div>
+            </div>
+            <span className="text-sm font-medium">Start at login</span>
+          </label>
         </div>
       </section>
 
-      {/* Privacy Notice */}
-      <section className="card-base p-6 border-green p-6 border-green-200 dark:border-green-800">
+      <section className="card p-5 border-green-200 dark:border-green-800/50 bg-green-50/50 dark:bg-green-950/20">
         <div className="flex items-start gap-3">
-          <Shield className="w-6 h-6 text-green-600 dark:text-green-400 mt-0.5" />
+          <Shield className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
           <div>
-            <h3 className="font-semibold text-green-800 dark:text-green-200">Privacy Guarantee</h3>
-            <ul className="text-sm text-green-700 dark:text-green-300 mt-2 space-y-1">
-              <li>• Audio processed 100% locally via Whisper.cpp</li>
-              <li>• AI cleanup only sends text (not audio) to OpenRouter</li>
-              <li>• API key encrypted with AES-256 in local SQLite</li>
-              <li>• Zero telemetry, zero analytics, zero tracking</li>
-              <li>• Open source — audit the code yourself</li>
+            <h3 className="font-semibold text-green-800 dark:text-green-200 text-sm">Privacy Guarantee</h3>
+            <ul className="text-xs text-green-700 dark:text-green-300/80 mt-2 space-y-1">
+              <li>- Audio processed via Whisper API (not stored)</li>
+              <li>- AI cleanup only sends text, never audio</li>
+              <li>- API key encrypted with AES-256 locally</li>
+              <li>- Zero telemetry, zero analytics, zero tracking</li>
+              <li>- Fully open source on GitHub</li>
             </ul>
           </div>
         </div>
@@ -654,109 +604,3 @@ function SettingsView({
     </div>
   )
 }
-
-function ModelCard({ model, selected, onSelect, onDownload }: { model: typeof WHISPER_MODELS[0]; selected: boolean; onSelect: () => void; onDownload: () => void }) {
-  return (
-    <button
-      onClick={onSelect}
-      className={`card-base p-4 flex items-center justify-between transition-all ${
-        selected ? 'border-primary bg-primary/5' : 'hover:border-primary/50'
-      }`}
-    >
-      <div className="flex items-center gap-4">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${selected ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
-          <Download className="w-5 h-5" />
-        </div>
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{model.id}</span>
-            {model.recommended && <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">Recommended</span>}
-          </div>
-          <p className="text-sm text-muted-foreground">{model.size} • {model.speed} • {model.quality} quality</p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        {selected ? (
-          <CheckCircle className="w-5 h-5 text-primary" />
-        ) : (
-          <button onClick={(e) => { e.stopPropagation(); onDownload(); }} className="btn-ghost text-sm">
-            Download
-          </button>
-        )}
-      </div>
-    </button>
-  )
-}
-
-// About View Component
-function AboutView() {
-  return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <div className="text-center">
-        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center mx-auto mb-4">
-          <Mic className="w-10 h-10 text-white" />
-        </div>
-        <h1 className="text-3xl font-bold">AuraScribe</h1>
-        <p className="text-muted-foreground mt-2">Your voice. Everywhere. Free forever.</p>
-      </div>
-
-      <div className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold">What is AuraScribe?</h2>
-        <p className="text-muted-foreground">
-          AuraScribe is a free, open-source voice input layer that sits on top of your operating system.
-          Speak naturally anywhere you'd type — VS Code, Notion, Slack, Email, Terminal, Browser — and watch
-          your words appear instantly with AI-powered cleanup.
-        </p>
-      </div>
-
-      <div className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Core Principles</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <PrincipleCard icon={<Lock />} title="Privacy First" desc="100% local processing. Your audio never leaves your device. AI cleanup is opt-in only." />
-          <PrincipleCard icon={<Github />} title="Open Source" desc="MIT licensed. Community-driven. No vendor lock-in. Fork it, modify it, self-host it." />
-          <PrincipleCard icon={<Zap />} title="Zero Latency" desc="Streaming Whisper.cpp + Silero VAD. Text appears as you speak, not after." />
-          <PrincipleCard icon={<Shield />} title="Secure by Default" desc="Encrypted settings, no telemetry, minimal permissions, code-signed releases." />
-        </div>
-      </div>
-
-      <div className="card-base p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Tech Stack</h2>
-        <div className="flex flex-wrap gap-2">
-          {['Tauri', 'Rust', 'Next.js', 'React', 'Whisper.cpp', 'Silero VAD', 'OpenRouter', 'SQLCipher', 'Tailwind CSS'].map((tech) => (
-            <span key={tech} className="px-3 py-1 bg-muted rounded-full text-sm font-medium">{tech}</span>
-          ))}
-        </div>
-      </div>
-
-      <div className="card-base p-6 text-center">
-        <h2 className="text-lg font-semibold mb-2">Built with the community</h2>
-        <p className="text-muted-foreground mb-4">Join us on GitHub — contribute, report issues, request features</p>
-        <a
-          href="https://github.com/aurascribe/aurascribe"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-primary inline-flex items-center gap-2"
-        >
-          <Github className="w-4 h-4" />
-          View on GitHub
-        </a>
-      </div>
-
-      <div className="text-center text-sm text-muted-foreground">
-        <p>AuraScribe v1.0.0 • MIT License • Made with ❤️ by contributors worldwide</p>
-      </div>
-    </div>
-  )
-}
-
-function PrincipleCard({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
-  return (
-    <div className="card-base p-4">
-      <div className="p-2 bg-primary/10 rounded-lg text-primary w-fit mb-3">{icon}</div>
-      <h3 className="font-semibold mb-1">{title}</h3>
-      <p className="text-sm text-muted-foreground">{desc}</p>
-    </div>
-  )
-}
-
-// Missing icons

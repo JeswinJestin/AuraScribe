@@ -34,6 +34,28 @@ impl Database {
 
     async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query(
+            "CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                hotkey TEXT DEFAULT 'Ctrl+Alt',
+                hotkey_mode TEXT DEFAULT 'toggle',
+                whisper_model TEXT DEFAULT 'base.en',
+                openrouter_key TEXT,
+                openrouter_model TEXT DEFAULT 'nvidia/nemotron-3-ultra',
+                ai_cleanup_enabled INTEGER NOT NULL DEFAULT 0,
+                auto_punctuation INTEGER NOT NULL DEFAULT 1,
+                language TEXT DEFAULT 'en',
+                theme TEXT DEFAULT 'dark',
+                start_at_login INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
+            .execute(pool)
+            .await?;
+
+        sqlx::query(
             "CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -57,73 +79,45 @@ impl Database {
         .execute(pool)
         .await?;
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS settings (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                openai_api_key TEXT,
-                openai_model TEXT,
-                openai_base_url TEXT,
-                openai_vo_model TEXT,
-                openrouter_api_key TEXT,
-                use_ollama INTEGER NOT NULL DEFAULT 0,
-                ollama_base_url TEXT,
-                ollama_model TEXT,
-                language TEXT NOT NULL DEFAULT 'auto',
-                push_to_talk_key TEXT,
-                theme TEXT NOT NULL DEFAULT 'system'
-            )",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
-            .execute(pool)
-            .await?;
-
         Ok(())
     }
 
     pub async fn save_settings(
         &self,
-        openai_api_key: &Option<String>,
-        openai_model: &Option<String>,
-        openai_base_url: &Option<String>,
-        openai_vo_model: &Option<String>,
-        openrouter_api_key: &Option<String>,
-        use_ollama: bool,
-        ollama_base_url: &Option<String>,
-        ollama_model: &Option<String>,
-        language: &str,
-        push_to_talk_key: &Option<String>,
-        theme: &str,
+        hotkey: &Option<String>,
+        hotkey_mode: &Option<String>,
+        whisper_model: &Option<String>,
+        openrouter_key: &Option<String>,
+        openrouter_model: &Option<String>,
+        ai_cleanup_enabled: i32,
+        auto_punctuation: i32,
+        language: &Option<String>,
+        theme: &Option<String>,
+        start_at_login: i32,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE settings SET
-                openai_api_key = $1, openai_model = $2, openai_base_url = $3,
-                openai_vo_model = $4, openrouter_api_key = $5, use_ollama = $6,
-                ollama_base_url = $7, ollama_model = $8, language = $9,
-                push_to_talk_key = $10, theme = $11
+                hotkey = $1, hotkey_mode = $2, whisper_model = $3,
+                openrouter_key = $4, openrouter_model = $5, ai_cleanup_enabled = $6,
+                auto_punctuation = $7, language = $8, theme = $9, start_at_login = $10
             WHERE id = 1",
         )
-        .bind(openai_api_key)
-        .bind(openai_model)
-        .bind(openai_base_url)
-        .bind(openai_vo_model)
-        .bind(openrouter_api_key)
-        .bind(use_ollama as i32)
-        .bind(ollama_base_url)
-        .bind(ollama_model)
+        .bind(hotkey)
+        .bind(hotkey_mode)
+        .bind(whisper_model)
+        .bind(openrouter_key)
+        .bind(openrouter_model)
+        .bind(ai_cleanup_enabled)
+        .bind(auto_punctuation)
         .bind(language)
-        .bind(push_to_talk_key)
         .bind(theme)
+        .bind(start_at_login)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    pub async fn load_settings(
-        &self,
-    ) -> Result<SettingsRow, sqlx::Error> {
+    pub async fn load_settings(&self) -> Result<SettingsRow, sqlx::Error> {
         let row = sqlx::query_as::<_, SettingsRow>("SELECT * FROM settings WHERE id = 1")
             .fetch_one(&self.pool)
             .await?;
@@ -207,17 +201,16 @@ impl Database {
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SettingsRow {
     pub id: i32,
-    pub openai_api_key: Option<String>,
-    pub openai_model: Option<String>,
-    pub openai_base_url: Option<String>,
-    pub openai_vo_model: Option<String>,
-    pub openrouter_api_key: Option<String>,
-    pub use_ollama: i32,
-    pub ollama_base_url: Option<String>,
-    pub ollama_model: Option<String>,
-    pub language: String,
-    pub push_to_talk_key: Option<String>,
-    pub theme: String,
+    pub hotkey: Option<String>,
+    pub hotkey_mode: Option<String>,
+    pub whisper_model: Option<String>,
+    pub openrouter_key: Option<String>,
+    pub openrouter_model: Option<String>,
+    pub ai_cleanup_enabled: i32,
+    pub auto_punctuation: i32,
+    pub language: Option<String>,
+    pub theme: Option<String>,
+    pub start_at_login: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
