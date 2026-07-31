@@ -1,367 +1,238 @@
-// src-tauri/src/db.rs
-//! Database layer using SQLx with SQLite + SQLCipher encryption
-
-use anyhow::{Context, Result};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
-use std::path::PathBuf;
-use directories::ProjectDirs;
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use std::str::FromStr;
+use tracing::info;
 
 pub struct Database {
     pool: SqlitePool,
-    master_key: String,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct Settings {
-    pub key: String,
-    pub value: String,
-    pub encrypted: bool,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct DictionaryEntry {
-    pub id: i64,
-    pub word: String,
-    pub replacement: String,
-    pub case_sensitive: bool,
-    pub whole_word: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct SnippetEntry {
-    pub id: i64,
-    pub trigger: String,
-    pub expansion: String,
-    pub description: Option<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct AppProfile {
-    pub id: i64,
-    pub app_name: String,
-    pub app_identifier: Option<String>,
-    pub style: String,
-    pub custom_prompt: Option<String>,
-    pub ai_cleanup: bool,
-    pub auto_punctuation: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct TranscriptEntry {
-    pub id: i64,
-    pub raw_text: String,
-    pub cleaned_text: Option<String>,
-    pub app_name: Option<String>,
-    pub model_used: String,
-    pub processing_time_ms: i64,
-    pub created_at: i64,
 }
 
 impl Database {
-    pub async fn new(master_key: String) -> Result<Self> {
-        let data_dir = Self::get_data_dir()?;
-        std::fs::create_dir_all(&data_dir).context("Failed to create data directory")?;
+    pub async fn new() -> Result<Self, sqlx::Error> {
+        let data_dir = dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("AuraScribe");
+        std::fs::create_dir_all(&data_dir).ok();
 
         let db_path = data_dir.join("aurascribe.db");
-        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let options = SqliteConnectOptions::from_str(&url)?
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
 
-        // Create pool with encryption
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(db_path)
-                    .create_if_missing(true)
-                    .pragma("key", format!("'{}'", master_key))
-                    .pragma("cipher", "aes-256-cbc")
-                    .pragma("kdf_iter", "256000")
-                    .pragma("page_size", "4096")
-            )
-            .await
-            .context("Failed to connect to database")?;
+        let pool = SqlitePool::connect_with(options).await?;
 
-        // Run migrations
-        sqlx::migrate!("./migrations").run(&pool).await.context("Migration failed")?;
-
-        Ok(Self { pool, master_key })
-    }
-
-    fn get_data_dir() -> Result<PathBuf> {
-        let proj = ProjectDirs::from("dev", "aurascribe", "AuraScribe")
-            .context("Could not determine project directories")?;
-        Ok(proj.data_dir().to_path_buf())
-    }
-
-    pub fn get_data_dir_path(&self) -> Result<PathBuf> {
-        Self::get_data_dir()
-    }
-
-    // Settings
-    pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT value, encrypted FROM settings WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
             .await?;
 
-        Ok(row.map(|r| {
-            let value: String = r.get("value");
-            let encrypted: bool = r.get("encrypted");
-            if encrypted {
-                crate::crypto::decrypt(&value, &self.master_key).unwrap_or(value)
-            } else {
-                value
-            }
-        }))
+        Self::run_migrations(&pool).await?;
+
+        info!("Database initialized at {}", db_path.display());
+
+        Ok(Self { pool })
     }
 
-    pub async fn set_setting(&self, key: &str, value: &str, encrypted: bool) -> Result<()> {
-        let stored_value = if encrypted {
-            crate::crypto::encrypt(value, &self.master_key)?
-        } else {
-            value.to_string()
-        };
+    async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(pool)
+        .await?;
 
         sqlx::query(
-            "INSERT INTO settings (key, value, encrypted, updated_at) VALUES (?, ?, ?, ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, encrypted = excluded.encrypted, updated_at = excluded.updated_at"
+            "CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            )",
         )
-        .bind(key)
-        .bind(&stored_value)
-        .bind(encrypted)
-        .bind(chrono::Utc::now().timestamp())
-        .execute(&self.pool)
+        .execute(pool)
         .await?;
 
-        Ok(())
-    }
-
-    pub async fn get_all_settings(&self) -> Result<Vec<Settings>> {
-        sqlx::query_as::<_, Settings>("SELECT * FROM settings")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
-    // Dictionary
-    pub async fn get_dictionary(&self) -> Result<Vec<DictionaryEntry>> {
-        sqlx::query_as::<_, DictionaryEntry>("SELECT * FROM dictionary ORDER BY word")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
-    pub async fn add_dictionary_entry(&self, entry: &DictionaryEntry) -> Result<i64> {
-        let result = sqlx::query(
-            "INSERT INTO dictionary (word, replacement, case_sensitive, whole_word) VALUES (?, ?, ?, ?)"
-        )
-        .bind(&entry.word)
-        .bind(&entry.replacement)
-        .bind(entry.case_sensitive)
-        .bind(entry.whole_word)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
-    }
-
-    pub async fn update_dictionary_entry(&self, id: i64, entry: &DictionaryEntry) -> Result<()> {
         sqlx::query(
-            "UPDATE dictionary SET word = ?, replacement = ?, case_sensitive = ?, whole_word = ?, updated_at = ? WHERE id = ?"
+            "CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                openai_api_key TEXT,
+                openai_model TEXT,
+                openai_base_url TEXT,
+                openai_vo_model TEXT,
+                openrouter_api_key TEXT,
+                use_ollama INTEGER NOT NULL DEFAULT 0,
+                ollama_base_url TEXT,
+                ollama_model TEXT,
+                language TEXT NOT NULL DEFAULT 'auto',
+                push_to_talk_key TEXT,
+                theme TEXT NOT NULL DEFAULT 'system'
+            )",
         )
-        .bind(&entry.word)
-        .bind(&entry.replacement)
-        .bind(entry.case_sensitive)
-        .bind(entry.whole_word)
-        .bind(chrono::Utc::now().timestamp())
-        .bind(id)
-        .execute(&self.pool)
+        .execute(pool)
         .await?;
 
-        Ok(())
-    }
-
-    pub async fn delete_dictionary_entry(&self, id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM dictionary WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
+            .execute(pool)
             .await?;
 
         Ok(())
     }
 
-    // Snippets
-    pub async fn get_snippets(&self) -> Result<Vec<SnippetEntry>> {
-        sqlx::query_as::<_, SnippetEntry>("SELECT * FROM snippets ORDER BY trigger")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
-    pub async fn add_snippet(&self, snippet: &SnippetEntry) -> Result<i64> {
-        let result = sqlx::query(
-            "INSERT INTO snippets (trigger, expansion, description) VALUES (?, ?, ?)"
-        )
-        .bind(&snippet.trigger)
-        .bind(&snippet.expansion)
-        .bind(&snippet.description)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
-    }
-
-    pub async fn update_snippet(&self, id: i64, snippet: &SnippetEntry) -> Result<()> {
-        sqlx::query(
-            "UPDATE snippets SET trigger = ?, expansion = ?, description = ?, updated_at = ? WHERE id = ?"
-        )
-        .bind(&snippet.trigger)
-        .bind(&snippet.expansion)
-        .bind(&snippet.description)
-        .bind(chrono::Utc::now().timestamp())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn delete_snippet(&self, id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM snippets WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
-    // App Profiles
-    pub async fn get_app_profiles(&self) -> Result<Vec<AppProfile>> {
-        sqlx::query_as::<_, AppProfile>("SELECT * FROM app_profiles ORDER BY app_name")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Into::into)
-    }
-
-    pub async fn add_app_profile(&self, profile: &AppProfile) -> Result<i64> {
-        let result = sqlx::query(
-            "INSERT INTO app_profiles (app_name, app_identifier, style, custom_prompt, ai_cleanup, auto_punctuation) VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&profile.app_name)
-        .bind(&profile.app_identifier)
-        .bind(&profile.style)
-        .bind(&profile.custom_prompt)
-        .bind(profile.ai_cleanup)
-        .bind(profile.auto_punctuation)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
-    }
-
-    pub async fn update_app_profile(&self, id: i64, profile: &AppProfile) -> Result<()> {
-        sqlx::query(
-            "UPDATE app_profiles SET app_name = ?, app_identifier = ?, style = ?, custom_prompt = ?, ai_cleanup = ?, auto_punctuation = ?, updated_at = ? WHERE id = ?"
-        )
-        .bind(&profile.app_name)
-        .bind(&profile.app_identifier)
-        .bind(&profile.style)
-        .bind(&profile.custom_prompt)
-        .bind(profile.ai_cleanup)
-        .bind(profile.auto_punctuation)
-        .bind(chrono::Utc::now().timestamp())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn delete_app_profile(&self, id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM app_profiles WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
-    // Transcripts
-    pub async fn save_transcript(
+    pub async fn save_settings(
         &self,
-        raw_text: &str,
-        cleaned_text: Option<&str>,
-        app_name: Option<&str>,
-        model_used: &str,
-        processing_time_ms: i64,
-    ) -> Result<i64> {
-        let result = sqlx::query(
-            "INSERT INTO transcripts (raw_text, cleaned_text, app_name, model_used, processing_time_ms) VALUES (?, ?, ?, ?, ?)"
+        openai_api_key: &Option<String>,
+        openai_model: &Option<String>,
+        openai_base_url: &Option<String>,
+        openai_vo_model: &Option<String>,
+        openrouter_api_key: &Option<String>,
+        use_ollama: bool,
+        ollama_base_url: &Option<String>,
+        ollama_model: &Option<String>,
+        language: &str,
+        push_to_talk_key: &Option<String>,
+        theme: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE settings SET
+                openai_api_key = $1, openai_model = $2, openai_base_url = $3,
+                openai_vo_model = $4, openrouter_api_key = $5, use_ollama = $6,
+                ollama_base_url = $7, ollama_model = $8, language = $9,
+                push_to_talk_key = $10, theme = $11
+            WHERE id = 1",
         )
-        .bind(raw_text)
-        .bind(cleaned_text)
-        .bind(app_name)
-        .bind(model_used)
-        .bind(processing_time_ms)
+        .bind(openai_api_key)
+        .bind(openai_model)
+        .bind(openai_base_url)
+        .bind(openai_vo_model)
+        .bind(openrouter_api_key)
+        .bind(use_ollama as i32)
+        .bind(ollama_base_url)
+        .bind(ollama_model)
+        .bind(language)
+        .bind(push_to_talk_key)
+        .bind(theme)
         .execute(&self.pool)
         .await?;
-
-        Ok(result.last_insert_rowid())
+        Ok(())
     }
 
-    pub async fn get_transcripts(&self, limit: i64, offset: i64) -> Result<Vec<TranscriptEntry>> {
-        sqlx::query_as::<_, TranscriptEntry>(
-            "SELECT * FROM transcripts ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    pub async fn load_settings(
+        &self,
+    ) -> Result<SettingsRow, sqlx::Error> {
+        let row = sqlx::query_as::<_, SettingsRow>("SELECT * FROM settings WHERE id = 1")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub async fn save_conversation(
+        &self,
+        id: &str,
+        title: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO conversations (id, title, updated_at) VALUES ($1, $2, datetime('now'))",
         )
-        .bind(limit)
-        .bind(offset)
+        .bind(id)
+        .bind(title)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn save_message(
+        &self,
+        id: &str,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(conversation_id)
+        .bind(role)
+        .bind(content)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_conversations(
+        &self,
+    ) -> Result<Vec<ConversationRow>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ConversationRow>(
+            "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC",
+        )
         .fetch_all(&self.pool)
-        .await
-        .map_err(Into::into)
+        .await?;
+        Ok(rows)
     }
 
-    pub async fn clear_transcripts(&self) -> Result<()> {
-        sqlx::query("DELETE FROM transcripts").execute(&self.pool).await?;
+    pub async fn load_conversation_messages(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<MessageRow>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, MessageRow>(
+            "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn delete_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM conversations WHERE id = $1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
+}
 
-    // Save/Load settings struct
-    pub async fn save_settings(&self, settings: &crate::commands::Settings) -> Result<()> {
-        self.set_setting("hotkey", &settings.hotkey, false).await?;
-        self.set_setting("hotkey_mode", &settings.hotkey_mode, false).await?;
-        self.set_setting("whisper_model", &settings.whisper_model, false).await?;
-        self.set_setting("openrouter_key", &settings.openrouter_key, true).await?;
-        self.set_setting("openrouter_model", &settings.openrouter_model, false).await?;
-        self.set_setting("ai_cleanup_enabled", &settings.ai_cleanup_enabled.to_string(), false).await?;
-        self.set_setting("auto_punctuation", &settings.auto_punctuation.to_string(), false).await?;
-        self.set_setting("language", &settings.language, false).await?;
-        self.set_setting("theme", &settings.theme, false).await?;
-        self.set_setting("start_at_login", &settings.start_at_login.to_string(), false).await?;
-        Ok(())
-    }
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SettingsRow {
+    pub id: i32,
+    pub openai_api_key: Option<String>,
+    pub openai_model: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub openai_vo_model: Option<String>,
+    pub openrouter_api_key: Option<String>,
+    pub use_ollama: i32,
+    pub ollama_base_url: Option<String>,
+    pub ollama_model: Option<String>,
+    pub language: String,
+    pub push_to_talk_key: Option<String>,
+    pub theme: String,
+}
 
-    pub async fn load_settings(&self) -> Result<crate::commands::Settings> {
-        let defaults = crate::commands::Settings::default();
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ConversationRow {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
 
-        Ok(crate::commands::Settings {
-            hotkey: self.get_setting("hotkey").await?.unwrap_or(defaults.hotkey),
-            hotkey_mode: self.get_setting("hotkey_mode").await?.unwrap_or(defaults.hotkey_mode),
-            whisper_model: self.get_setting("whisper_model").await?.unwrap_or(defaults.whisper_model),
-            openrouter_key: self.get_setting("openrouter_key").await?.unwrap_or(defaults.openrouter_key),
-            openrouter_model: self.get_setting("openrouter_model").await?.unwrap_or(defaults.openrouter_model),
-            ai_cleanup_enabled: self.get_setting("ai_cleanup_enabled").await?.unwrap_or(defaults.ai_cleanup_enabled.to_string()).parse().unwrap_or(defaults.ai_cleanup_enabled),
-            auto_punctuation: self.get_setting("auto_punctuation").await?.unwrap_or(defaults.auto_punctuation.to_string()).parse().unwrap_or(defaults.auto_punctuation),
-            language: self.get_setting("language").await?.unwrap_or(defaults.language),
-            theme: self.get_setting("theme").await?.unwrap_or(defaults.theme),
-            start_at_login: self.get_setting("start_at_login").await?.unwrap_or(defaults.start_at_login.to_string()).parse().unwrap_or(defaults.start_at_login),
-        })
-    }
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct MessageRow {
+    pub id: String,
+    pub conversation_id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
 }

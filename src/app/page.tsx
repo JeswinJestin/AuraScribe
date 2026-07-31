@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Mic, MicOff, Settings, Shield, Download, Github, ExternalLink, Loader2, CheckCircle, AlertCircle, Info, Sparkles, Zap, Lock, Globe } from 'lucide-react'
-import { invoke, listen, emit } from '@tauri-apps/api/core'
-import { available } from '@tauri-apps/api/core'
+import React from 'react'
+import { Mic, MicOff, Settings, Shield, Download, Github, ExternalLink, Loader2, CheckCircle, AlertCircle, Info, Sparkles, Zap, Lock, Globe, Sun, Moon, Eye, EyeOff } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
+import { listen, emit } from '@tauri-apps/api/event'
+import { isTauri } from '@tauri-apps/api/core'
 
 interface Status {
   isRecording: boolean
@@ -70,14 +72,21 @@ export default function Home() {
   const [showKey, setShowKey] = useState(false)
 
   useEffect(() => {
+    let unlistenStatus: () => void
+    let unlistenSettings: () => void
+
     const init = async () => {
       try {
-        const isTauri = await available()
-        if (isTauri) {
+        const tauriAvailable = await isTauri()
+        if (tauriAvailable) {
           const loadedSettings = await invoke<SettingsData>('get_settings')
           setSettings(loadedSettings)
           const loadedStatus = await invoke<Status>('get_status')
           setStatus(loadedStatus)
+
+          // Set up event listeners
+          unlistenStatus = await listen<Status>('status-changed', (e) => setStatus(e.payload))
+          unlistenSettings = await listen<SettingsData>('settings-changed', (e) => setSettings(e.payload))
         }
       } catch (e) {
         console.error('Failed to load initial state:', e)
@@ -85,14 +94,12 @@ export default function Home() {
         setIsLoading(false)
       }
     }
+
     init()
 
-    const unlistenStatus = await listen<Status>('status-changed', (e) => setStatus(e.payload))
-    const unlistenSettings = await listen<SettingsData>('settings-changed', (e) => setSettings(e.payload))
-
     return () => {
-      unlistenStatus()
-      unlistenSettings()
+      if (unlistenStatus) unlistenStatus()
+      if (unlistenSettings) unlistenSettings()
     }
   }, [])
 
@@ -753,4 +760,3 @@ function PrincipleCard({ icon, title, desc }: { icon: React.ReactNode; title: st
 }
 
 // Missing icons
-import { Sun, Moon, Eye, EyeOff } from 'lucide-react'

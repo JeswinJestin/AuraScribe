@@ -5,7 +5,7 @@ description = "Free, open-source, privacy-first voice dictation that works every
 authors = ["AuraScribe Contributors"]
 license = "MIT"
 edition = "2021"
-repository = "https://github.com/aurascribe/aurascribe"
+repository = "https://github.com/JeswinJestin/AuraScribe"
 
 [workspace]
 members = []
@@ -14,22 +14,22 @@ members = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# Tauri
+# Tauri core
 tauri = { version = "2", features = [
     "tray-icon",
-    "global-shortcut",
-    "notification",
-    "clipboard-manager",
-    "shell",
-    "opener",
-    "os-info",
-    "updater",
-    "sql",
-    "store",
-    "fs",
-    "dialog",
-    "http",
 ] }
+
+# Tauri plugins
+tauri-plugin-store = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-process = "2"
+tauri-plugin-window-state = "2"
 
 # Async runtime
 tokio = { version = "1.38", features = ["full"] }
@@ -39,19 +39,15 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Audio
-cpal = { version = "0.15", features = ["jack", "alsa", "pulse", "wasapi", "coreaudio"] }
+cpal = "0.15"
 rubato = "0.15"
 ringbuf = { version = "0.3", features = ["std"] }
 
-# VAD
-silero-vad = "0.4"
-
-# Whisper.cpp bindings
-whisper-rs = { version = "0.7", features = ["cuda", "metal", "vulkan", "openblas"] }
+# Whisper.cpp bindings (optional — requires libclang for bindgen)
+whisper-rs = { version = "0.7", optional = true }
 
 # Database
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "migrate"] }
-sqlcipher = { version = "0.29", features = ["bundled"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
 
 # Encryption
 aes-gcm = "0.10"
@@ -59,20 +55,11 @@ pbkdf2 = "0.12"
 sha2 = "0.10"
 rand = { version = "0.8", features = ["std"] }
 zeroize = "1.7"
+base64 = "0.22"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-
-# System integration
-windows = { version = "0.58", target = "cfg(windows)", features = [
-    "Win32_UI_Accessibility",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_Com",
-    "Win32_Foundation",
-    "Win32_System_Ole",
-] }
-objc = { version = "0.2", target = "cfg(target_os = \"macos\")" }
-block = { version = "0.1", target = "cfg(target_os = \"macos\")" }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+futures-util = "0.3"
 
 # Utilities
 anyhow = "1.0"
@@ -82,9 +69,27 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 dirs = "5.0"
 once_cell = "1.19"
 parking_lot = "0.12"
+chrono = "0.4"
 
-# Plugin system (future)
-# wasmtime = "25"
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_Foundation",
+    "Win32_System_Ole",
+] }
+winreg = "0.52"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = "0.2"
+objc2-app-kit = "0.2"
+core-graphics = "0.24"
+
+[features]
+default = ["whisper"]
+whisper = ["dep:whisper-rs"]
 
 [profile.release]
 opt-level = 3

@@ -1,529 +1,143 @@
-// src-tauri/src/commands.rs
-//! Tauri command handlers for frontend IPC
-
-use anyhow::{Context, Result};
+use crate::app_state::AppState;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::mpsc;
-
-use crate::{
-    asr::WhisperASR,
-    audio::{AudioCapture, VoiceActivityDetector, VoiceActivity},
-    db::{Database, Settings as DbSettings},
-    injection::TextInjector,
-    llm::LLMCleanup,
-    models::ModelManager,
-    system::{GlobalShortcutManager, SystemTrayManager},
-    vad::SileroVad,
-};
-
-// State structures
-pub struct AppState {
-    pub asr: Arc<Mutex<WhisperASR>>,
-    pub audio_capture: Arc<Mutex<Option<AudioCapture>>>,
-    pub vad: Arc<Mutex<SileroVad>>,
-    pub voice_detector: Arc<Mutex<Option<VoiceActivityDetector>>>,
-    pub injector: Arc<Mutex<Option<TextInjector>>>,
-    pub llm_cleanup: Arc<Mutex<Option<LLMCleanup>>>,
-    pub model_manager: Arc<Mutex<ModelManager>>,
-    pub db: Arc<Mutex<Database>>,
-    pub shortcut_manager: Arc<Mutex<GlobalShortcutManager>>,
-    pub tray_manager: Arc<Mutex<SystemTrayManager>>,
-    pub settings: Arc<Mutex<Settings>>,
-    pub recording_state: Arc<Mutex<RecordingState>>,
-}
+use tauri::command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    pub hotkey: String,
-    pub hotkey_mode: String, // "press-hold" | "toggle"
-    pub whisper_model: String,
-    pub openrouter_key: String,
-    pub openrouter_model: String,
-    pub ai_cleanup_enabled: bool,
-    pub auto_punctuation: bool,
+    pub openai_api_key: Option<String>,
+    pub openai_model: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub openai_vo_model: Option<String>,
+    pub openrouter_api_key: Option<String>,
+    pub use_ollama: bool,
+    pub ollama_base_url: Option<String>,
+    pub ollama_model: Option<String>,
     pub language: String,
+    pub push_to_talk_key: Option<String>,
     pub theme: String,
-    pub start_at_login: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            hotkey: "Ctrl+Space".to_string(),
-            hotkey_mode: "press-hold".to_string(),
-            whisper_model: "base.en".to_string(),
-            openrouter_key: String::new(),
-            openrouter_model: "nvidia/nemotron-3-ultra".to_string(),
-            ai_cleanup_enabled: false,
-            auto_punctuation: true,
-            language: "en".to_string(),
+            openai_api_key: None,
+            openai_model: Some("whisper-large-v3".to_string()),
+            openai_base_url: None,
+            openai_vo_model: Some("gpt-4o".to_string()),
+            openrouter_api_key: None,
+            use_ollama: false,
+            ollama_base_url: Some("http://localhost:11434".to_string()),
+            ollama_model: Some("llama3".to_string()),
+            language: "auto".to_string(),
+            push_to_talk_key: None,
             theme: "system".to_string(),
-            start_at_login: false,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Status {
-    pub is_recording: bool,
-    pub is_processing: bool,
-    pub is_model_loaded: bool,
-    pub current_text: String,
-    pub last_error: Option<String>,
-    pub hotkey_mode: String,
-    pub ai_cleanup_enabled: bool,
+#[command]
+pub async fn save_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.save_settings(
+        &settings.openai_api_key,
+        &settings.openai_model,
+        &settings.openai_base_url,
+        &settings.openai_vo_model,
+        &settings.openrouter_api_key,
+        settings.use_ollama,
+        &settings.ollama_base_url,
+        &settings.ollama_model,
+        &settings.language,
+        &settings.push_to_talk_key,
+        &settings.theme,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Default)]
-struct RecordingState {
-    is_recording: bool,
-    is_processing: bool,
-    buffer: Vec<f32>,
-    current_transcript: String,
-    audio_receiver: Option<mpsc::UnboundedReceiver<Vec<f32>>>,
-}
-
-// Initialize state
-pub fn init_state(app: &AppHandle) -> Result<AppState> {
-    let db = Database::new(app)?;
-    let settings = db.load_settings()?;
-
-    let asr = WhisperASR::new()?;
-    let vad = SileroVad::new()?;
-    let model_manager = ModelManager::new()?;
-
-    Ok(AppState {
-        asr: Arc::new(Mutex::new(asr)),
-        audio_capture: Arc::new(Mutex::new(None)),
-        vad: Arc::new(Mutex::new(vad)),
-        voice_detector: Arc::new(Mutex::new(None)),
-        injector: Arc::new(Mutex::new(None)),
-        llm_cleanup: Arc::new(Mutex::new(None)),
-        model_manager: Arc::new(Mutex::new(model_manager)),
-        db: Arc::new(Mutex::new(db)),
-        shortcut_manager: Arc::new(Mutex::new(GlobalShortcutManager::new())),
-        tray_manager: Arc::new(Mutex::new(SystemTrayManager::new(app.clone())?)),
-        settings: Arc::new(Mutex::new(settings)),
-        recording_state: Arc::new(Mutex::new(RecordingState::default())),
+#[command]
+pub async fn load_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
+    let db = state.db.lock().await;
+    let row = db.load_settings().await.map_err(|e| e.to_string())?;
+    Ok(Settings {
+        openai_api_key: row.openai_api_key,
+        openai_model: row.openai_model,
+        openai_base_url: row.openai_base_url,
+        openai_vo_model: row.openai_vo_model,
+        openrouter_api_key: row.openrouter_api_key,
+        use_ollama: row.use_ollama != 0,
+        ollama_base_url: row.ollama_base_url,
+        ollama_model: row.ollama_model,
+        language: row.language,
+        push_to_talk_key: row.push_to_talk_key,
+        theme: row.theme,
     })
 }
 
-// ===== Commands =====
-
-#[tauri::command]
-pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
-    Ok(state.settings.lock().unwrap().clone())
-}
-
-#[tauri::command]
-pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
-    let mut s = state.settings.lock().unwrap();
-    *s = settings.clone();
-
-    // Persist to database
-    state.db.lock().unwrap().save_settings(&settings)?;
-
-    // Update hotkey if changed
-    state.shortcut_manager.lock().unwrap().update_hotkey(&settings.hotkey, &settings.hotkey_mode)?;
-
-    // Emit event
-    state.app_handle().emit("settings-changed", &settings).ok();
-
+#[command]
+pub async fn start_dictation() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn load_settings(state: State<'_, AppState>) -> Result<(), String> {
-    let settings = state.db.lock().unwrap().load_settings()?;
-    *state.settings.lock().unwrap() = settings.clone();
-    state.app_handle().emit("settings-changed", &settings).ok();
+#[command]
+pub async fn stop_dictation() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_status(state: State<'_, AppState>) -> Result<Status, String> {
-    let settings = state.settings.lock().unwrap();
-    let recording = state.recording_state.lock().unwrap();
-    let asr = state.asr.lock().unwrap();
-
-    Ok(Status {
-        is_recording: recording.is_recording,
-        is_processing: recording.is_processing,
-        is_model_loaded: asr.get_current_model().is_some(),
-        current_text: recording.current_transcript.clone(),
-        last_error: None,
-        hotkey_mode: settings.hotkey_mode.clone(),
-        ai_cleanup_enabled: settings.ai_cleanup_enabled,
-    })
+#[command]
+pub async fn list_models() -> Result<Vec<String>, String> {
+    Ok(vec![])
 }
 
-#[tauri::command]
-pub async fn start_recording(state: State<'_, AppState>) -> Result<(), String> {
-    let mut recording = state.recording_state.lock().unwrap();
-
-    if recording.is_recording {
-        return Ok(());
-    }
-
-    // Load model if not loaded
-    let model_id = {
-        let settings = state.settings.lock().unwrap();
-        settings.whisper_model.clone()
-    };
-
-    {
-        let asr = state.asr.lock().unwrap();
-        if asr.get_current_model() != Some(model_id.clone()) {
-            asr.load_model(&model_id).map_err(|e| e.to_string())?;
-        }
-    }
-
-    // Initialize audio capture
-    let vad = state.vad.lock().unwrap().clone();
-    let mut audio_capture = AudioCapture::new(vad).map_err(|e| e.to_string())?;
-
-    let app_handle = state.app_handle().clone();
-    let rx = audio_capture.start(app_handle.clone()).map_err(|e| e.to_string())?;
-
-    // Initialize voice detector
-    let vad_clone = state.vad.lock().unwrap().clone();
-    let voice_detector = VoiceActivityDetector::new(vad_clone);
-
-    recording.is_recording = true;
-    recording.is_processing = false;
-    recording.buffer.clear();
-    recording.current_transcript.clear();
-    recording.audio_receiver = Some(rx);
-
-    *state.audio_capture.lock().unwrap() = Some(audio_capture);
-    *state.voice_detector.lock().unwrap() = Some(voice_detector);
-
-    // Initialize injector
-    let injector = TextInjector::new(app_handle.clone());
-    *state.injector.lock().unwrap() = Some(injector);
-
-    // Initialize LLM cleanup if enabled
-    let settings = state.settings.lock().unwrap();
-    if settings.ai_cleanup_enabled && !settings.openrouter_key.is_empty() {
-        let llm = LLMCleanup::new(&settings.openrouter_key, &settings.openrouter_model);
-        *state.llm_cleanup.lock().unwrap() = Some(llm);
-    }
-
-    // Start processing loop
-    let state_clone = state.inner().clone();
-    tokio::spawn(async move {
-        process_audio_loop(state_clone).await;
-    });
-
-    state.app_handle().emit("status-changed", get_status_internal(&state).await).ok();
-
+#[command]
+pub async fn download_model(_model: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn stop_recording(state: State<'_, AppState>) -> Result<(), String> {
-    let mut recording = state.recording_state.lock().unwrap();
+#[command]
+pub async fn get_model_status() -> Result<String, String> {
+    Ok("ready".to_string())
+}
 
-    if !recording.is_recording {
-        return Ok(());
-    }
-
-    recording.is_recording = false;
-    recording.is_processing = true;
-
-    // Stop audio capture
-    if let Some(mut capture) = state.audio_capture.lock().unwrap().take() {
-        capture.stop();
-    }
-
-    // Process remaining buffer
-    if !recording.buffer.is_empty() {
-        recording.is_processing = true;
-        let buffer = std::mem::take(&mut recording.buffer);
-        let asr = state.asr.lock().unwrap();
-
-        match asr.transcribe(&buffer, Some("en")) {
-            Ok(text) => {
-                recording.current_transcript = text.clone();
-
-                // Apply AI cleanup if enabled
-                let settings = state.settings.lock().unwrap();
-                let final_text = if settings.ai_cleanup_enabled {
-                    if let Some(llm) = state.llm_cleanup.lock().unwrap().as_ref() {
-                        llm.cleanup(&text, &settings.language).await.unwrap_or(text)
-                    } else {
-                        text
-                    }
-                } else {
-                    text
-                };
-
-                // Inject into active app
-                if let Some(injector) = state.injector.lock().unwrap().as_ref() {
-                    injector.inject(&final_text).ok();
-                }
-
-                // Save transcript
-                state.db.lock().unwrap().save_transcript(&text, &final_text, "base.en", 0).ok();
-            }
-            Err(e) => {
-                tracing::error!("Transcription failed: {}", e);
-            }
-        }
-    }
-
-    recording.is_processing = false;
-
-    state.app_handle().emit("status-changed", get_status_internal(&state).await).ok();
-    state.app_handle().emit("transcript-received", &recording.current_transcript).ok();
-
+#[command]
+pub async fn open_model_directory() -> Result<(), String> {
     Ok(())
 }
 
-async fn process_audio_loop(state: Arc<AppState>) {
-    let mut rx = {
-        let mut recording = state.recording_state.lock().unwrap();
-        recording.audio_receiver.take()
-    };
-
-    if rx.is_none() {
-        return;
-    }
-
-    let mut rx = rx.unwrap();
-
-    while let Some(chunk) = rx.recv().await {
-        let should_continue = {
-            let recording = state.recording_state.lock().unwrap();
-            recording.is_recording
-        };
-
-        if !should_continue {
-            break;
-        }
-
-        // Add to buffer
-        {
-            let mut recording = state.recording_state.lock().unwrap();
-            recording.buffer.extend_from_slice(&chunk);
-        }
-
-        // Process through VAD
-        let voice_activity = {
-            let mut detector = state.voice_detector.lock().unwrap();
-            if let Some(detector) = detector.as_mut() {
-                detector.process(&chunk)
-            } else {
-                VoiceActivity::Speech
-            }
-        };
-
-        match voice_activity {
-            VoiceActivity::Speech => {
-                // Continue accumulating
-            }
-            VoiceActivity::EndOfSpeech(speech_audio) => {
-                // Transcribe the speech segment
-                let asr = state.asr.lock().unwrap();
-                if let Ok(text) = asr.transcribe(&speech_audio, Some("en")) {
-                    let mut recording = state.recording_state.lock().unwrap();
-                    recording.current_transcript.push_str(&text);
-                    recording.current_transcript.push(' ');
-
-                    // Emit partial transcript
-                    state.app_handle().emit("transcript-received", &recording.current_transcript).ok();
-                }
-            }
-            _ => {}
-        }
-    }
+#[command]
+pub async fn get_log_file_path() -> Result<String, String> {
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("AuraScribe");
+    Ok(data_dir.join("aurascribe.log").to_string_lossy().to_string())
 }
 
-async fn get_status_internal(state: &State<'_, AppState>) -> Status {
-    let settings = state.settings.lock().unwrap();
-    let recording = state.recording_state.lock().unwrap();
-    let asr = state.asr.lock().unwrap();
-
-    Status {
-        is_recording: recording.is_recording,
-        is_processing: recording.is_processing,
-        is_model_loaded: asr.get_current_model().is_some(),
-        current_text: recording.current_transcript.clone(),
-        last_error: None,
-        hotkey_mode: settings.hotkey_mode.clone(),
-        ai_cleanup_enabled: settings.ai_cleanup_enabled,
-    }
-}
-
-// Model management
-#[tauri::command]
-pub async fn download_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
-    let asr = state.asr.lock().unwrap();
-    asr.download_model(&model_id).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn load_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
-    let asr = state.asr.lock().unwrap();
-    asr.load_model(&model_id).map_err(|e| e.to_string())?;
-
-    // Update settings
-    let mut settings = state.settings.lock().unwrap();
-    settings.whisper_model = model_id;
-    state.db.lock().unwrap().save_settings(&settings)?;
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<crate::asr::ModelInfo>, String> {
-    let asr = state.asr.lock().unwrap();
-    Ok(asr.list_available_models())
-}
-
-#[tauri::command]
-pub async fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
-    let asr = state.asr.lock().unwrap();
-    asr.delete_model(&model_id).map_err(|e| e.to_string())
-}
-
-// Dictionary
-#[tauri::command]
-pub async fn get_dictionary(state: State<'_, AppState>) -> Result<Vec<crate::db::DictionaryEntry>, String> {
-    state.db.lock().unwrap().get_dictionary().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn add_dictionary_entry(
-    state: State<'_, AppState>,
-    entry: crate::db::DictionaryEntry,
-) -> Result<i64, String> {
-    state.db.lock().unwrap().add_dictionary_entry(entry).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn update_dictionary_entry(
-    state: State<'_, AppState>,
-    id: i64,
-    entry: crate::db::DictionaryEntry,
+#[command]
+pub async fn delete_conversation(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
 ) -> Result<(), String> {
-    state.db.lock().unwrap().update_dictionary_entry(id, entry).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn delete_dictionary_entry(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    state.db.lock().unwrap().delete_dictionary_entry(id).map_err(|e| e.to_string())
-}
-
-// Snippets
-#[tauri::command]
-pub async fn get_snippets(state: State<'_, AppState>) -> Result<Vec<crate::db::SnippetEntry>, String> {
-    state.db.lock().unwrap().get_snippets().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn add_snippet(
-    state: State<'_, AppState>,
-    snippet: crate::db::SnippetEntry,
-) -> Result<i64, String> {
-    state.db.lock().unwrap().add_snippet(snippet).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn update_snippet(
-    state: State<'_, AppState>,
-    id: i64,
-    snippet: crate::db::SnippetEntry,
-) -> Result<(), String> {
-    state.db.lock().unwrap().update_snippet(id, snippet).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn delete_snippet(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    state.db.lock().unwrap().delete_snippet(id).map_err(|e| e.to_string())
-}
-
-// App Profiles
-#[tauri::command]
-pub async fn get_app_profiles(state: State<'_, AppState>) -> Result<Vec<crate::db::AppProfile>, String> {
-    state.db.lock().unwrap().get_app_profiles().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn add_app_profile(
-    state: State<'_, AppState>,
-    profile: crate::db::AppProfile,
-) -> Result<i64, String> {
-    state.db.lock().unwrap().add_app_profile(profile).map_err(|e| e.to_string())
-}
-
-// Transcripts
-#[tauri::command]
-pub async fn get_transcripts(
-    state: State<'_, AppState>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-) -> Result<Vec<crate::db::TranscriptEntry>, String> {
-    state.db.lock().unwrap()
-        .get_transcripts(limit.unwrap_or(100), offset.unwrap_or(0))
+    let db = state.db.lock().await;
+    db.delete_conversation(&conversation_id)
+        .await
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn clear_transcripts(state: State<'_, AppState>) -> Result<(), String> {
-    state.db.lock().unwrap().clear_transcripts().map_err(|e| e.to_string())
+#[command]
+pub async fn list_conversations(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<crate::db::ConversationRow>, String> {
+    let db = state.db.lock().await;
+    db.list_conversations().await.map_err(|e| e.to_string())
 }
 
-// AI Cleanup
-#[tauri::command]
-pub async fn cleanup_with_ai(
-    state: State<'_, AppState>,
-    text: String,
-    style: String,
-    openrouter_key: String,
-    openrouter_model: String,
-) -> Result<String, String> {
-    let llm = crate::llm::LLMCleanup::new(&openrouter_key, &openrouter_model);
-    llm.cleanup(&text, &style).await.map_err(|e| e.to_string())
-}
-
-// System
-#[tauri::command]
-pub async fn set_start_at_login(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
-    settings.start_at_login = enabled;
-    state.db.lock().unwrap().save_settings(&settings)?;
-    state.shortcut_manager.lock().unwrap().set_autostart(enabled)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn open_settings_folder(state: State<'_, AppState>) -> Result<(), String> {
-    let path = state.db.lock().unwrap().get_data_dir()?;
-    tauri::plugin::opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn check_microphone_permission() -> Result<bool, String> {
-    // Platform-specific check
-    Ok(true) // Simplified
-}
-
-#[tauri::command]
-pub async fn request_microphone_permission() -> Result<bool, String> {
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn check_accessibility_permission() -> Result<bool, String> {
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn request_accessibility_permission() -> Result<(), String> {
-    Ok(())
+#[command]
+pub async fn load_conversation(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Vec<crate::db::MessageRow>, String> {
+    let db = state.db.lock().await;
+    db.load_conversation_messages(&conversation_id)
+        .await
+        .map_err(|e| e.to_string())
 }
