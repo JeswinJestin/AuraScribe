@@ -21,6 +21,8 @@ node_modules/
 out/
 dist/
 build/
+.next/
+src-tauri/gen/
 
 # Environment
 .env
