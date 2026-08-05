@@ -17,19 +17,13 @@ tauri-build = { version = "2", features = [] }
 # Tauri core
 tauri = { version = "2", features = [
     "tray-icon",
+    # Image::from_bytes, used to swap the tray icon between idle/listening/processing
+    "image-png",
 ] }
 
 # Tauri plugins
-tauri-plugin-store = "2"
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-notification = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-process = "2"
-tauri-plugin-window-state = "2"
+tauri-plugin-single-instance = "2"
 
 # Async runtime
 tokio = { version = "1.38", features = ["full"] }
@@ -40,44 +34,36 @@ serde_json = "1.0"
 
 # Audio
 cpal = "0.15"
-rubato = "0.15"
-ringbuf = { version = "0.3", features = ["std"] }
 
-# Whisper.cpp bindings (optional — requires libclang for bindgen)
-whisper-rs = { version = "0.7", optional = true }
+# Whisper.cpp bindings (requires libclang for bindgen).
+# 0.16 bundles a modern whisper.cpp, which is what makes large-v3-turbo and the
+# distil models available — accuracy near large-v3 at a fraction of the runtime.
+whisper-rs = { version = "0.16", optional = true }
 
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
 
-# Encryption
-aes-gcm = "0.10"
-pbkdf2 = "0.12"
-sha2 = "0.10"
-rand = { version = "0.8", features = ["std"] }
-zeroize = "1.7"
-base64 = "0.22"
-
-# HTTP client
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "multipart"] }
+# HTTP client (model downloads only)
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 
 # Utilities
 anyhow = "1.0"
-thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 dirs = "5.0"
-once_cell = "1.19"
-parking_lot = "0.12"
 chrono = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_UI_Accessibility",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Com",
     "Win32_Foundation",
     "Win32_System_Ole",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
 ] }
 winreg = "0.52"
 
@@ -88,7 +74,7 @@ objc2-app-kit = "0.2"
 core-graphics = "0.24"
 
 [features]
-default = []
+default = ["whisper"]
 whisper = ["dep:whisper-rs"]
 
 [profile.release]

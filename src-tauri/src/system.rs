@@ -23,23 +23,7 @@ pub fn set_startup(auto_start: bool) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_startup(auto_start: bool) -> Result<(), String> {
-    Err("Startup management not implemented on this platform".into())
+pub fn set_startup(_auto_start: bool) -> Result<(), String> {
+    Err("Startup management is not yet implemented on this platform".into())
 }
 
-pub fn is_auto_start_enabled() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        use winreg::enums::*;
-        use winreg::RegKey;
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let path = r"Software\Microsoft\Windows\CurrentVersion\Run";
-        hkcu.open_subkey_with_flags(path, KEY_READ)
-            .and_then(|key| key.get_value::<String, _>("AuraScribe"))
-            .is_ok()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}

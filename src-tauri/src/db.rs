@@ -1,4 +1,5 @@
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::SqlitePool;
 use std::str::FromStr;
 use tracing::info;
 
@@ -19,181 +20,271 @@ impl Database {
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
 
+        // Migrations run on their own short-lived connection which is then closed.
+        // A migration that drops and recreates a table (see 002) leaves any connection
+        // opened beforehand holding a stale schema, which surfaces on the first read as
+        // "no column found for name: hotkey". Opening the app pool only after the schema
+        // is final avoids that entirely.
+        {
+            let migrator_pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options.clone())
+                .await?;
+            sqlx::migrate!("./migrations").run(&migrator_pool).await?;
+            migrator_pool.close().await;
+        }
+
         let pool = SqlitePool::connect_with(options).await?;
 
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&pool)
             .await?;
 
-        Self::run_migrations(&pool).await?;
-
         info!("Database initialized at {}", db_path.display());
 
         Ok(Self { pool })
     }
 
-    async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS settings (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                hotkey TEXT DEFAULT 'Ctrl+Alt',
-                hotkey_mode TEXT DEFAULT 'toggle',
-                whisper_model TEXT DEFAULT 'base.en',
-                openrouter_key TEXT,
-                openrouter_model TEXT DEFAULT 'nvidia/nemotron-3-ultra',
-                ai_cleanup_enabled INTEGER NOT NULL DEFAULT 0,
-                auto_punctuation INTEGER NOT NULL DEFAULT 1,
-                language TEXT DEFAULT 'en',
-                theme TEXT DEFAULT 'dark',
-                start_at_login INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(pool)
-        .await?;
+    // ---- Settings ----
 
-        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
-            .execute(pool)
-            .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-            )",
-        )
-        .execute(pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn save_settings(
-        &self,
-        hotkey: &Option<String>,
-        hotkey_mode: &Option<String>,
-        whisper_model: &Option<String>,
-        openrouter_key: &Option<String>,
-        openrouter_model: &Option<String>,
-        ai_cleanup_enabled: i32,
-        auto_punctuation: i32,
-        language: &Option<String>,
-        theme: &Option<String>,
-        start_at_login: i32,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn save_settings(&self, s: &SettingsRow) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE settings SET
-                hotkey = $1, hotkey_mode = $2, whisper_model = $3,
-                openrouter_key = $4, openrouter_model = $5, ai_cleanup_enabled = $6,
-                auto_punctuation = $7, language = $8, theme = $9, start_at_login = $10
+                hotkey = $1, hotkey_mode = $2, whisper_model = $3, mic_device = $4,
+                ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
+                theme = $8, start_at_login = $9
             WHERE id = 1",
         )
-        .bind(hotkey)
-        .bind(hotkey_mode)
-        .bind(whisper_model)
-        .bind(openrouter_key)
-        .bind(openrouter_model)
-        .bind(ai_cleanup_enabled)
-        .bind(auto_punctuation)
-        .bind(language)
-        .bind(theme)
-        .bind(start_at_login)
+        .bind(&s.hotkey)
+        .bind(&s.hotkey_mode)
+        .bind(&s.whisper_model)
+        .bind(&s.mic_device)
+        .bind(s.ai_cleanup_enabled)
+        .bind(s.remove_fillers)
+        .bind(&s.language)
+        .bind(&s.theme)
+        .bind(s.start_at_login)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     pub async fn load_settings(&self) -> Result<SettingsRow, sqlx::Error> {
-        let row = sqlx::query_as::<_, SettingsRow>("SELECT * FROM settings WHERE id = 1")
+        sqlx::query_as::<_, SettingsRow>("SELECT * FROM settings WHERE id = 1")
             .fetch_one(&self.pool)
-            .await?;
-        Ok(row)
+            .await
     }
 
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
+    // ---- Dictionary ----
 
-    pub async fn save_conversation(
-        &self,
-        id: &str,
-        title: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO conversations (id, title, updated_at) VALUES ($1, $2, datetime('now'))",
-        )
-        .bind(id)
-        .bind(title)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn save_message(
-        &self,
-        id: &str,
-        conversation_id: &str,
-        role: &str,
-        content: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO messages (id, conversation_id, role, content) VALUES ($1, $2, $3, $4)",
-        )
-        .bind(id)
-        .bind(conversation_id)
-        .bind(role)
-        .bind(content)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn list_conversations(
-        &self,
-    ) -> Result<Vec<ConversationRow>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, ConversationRow>(
-            "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC",
+    pub async fn list_dictionary(&self) -> Result<Vec<DictionaryRow>, sqlx::Error> {
+        sqlx::query_as::<_, DictionaryRow>(
+            "SELECT id, word, replacement, case_sensitive, whole_word, created_at FROM dictionary ORDER BY word",
         )
         .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        .await
     }
 
-    pub async fn load_conversation_messages(
+    pub async fn add_dictionary_entry(
         &self,
-        conversation_id: &str,
-    ) -> Result<Vec<MessageRow>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
+        word: &str,
+        replacement: &str,
+        case_sensitive: bool,
+        whole_word: bool,
+    ) -> Result<i64, sqlx::Error> {
+        let result = sqlx::query(
+            "INSERT INTO dictionary (word, replacement, case_sensitive, whole_word) VALUES ($1, $2, $3, $4)",
         )
-        .bind(conversation_id)
-        .fetch_all(&self.pool)
+        .bind(word)
+        .bind(replacement)
+        .bind(case_sensitive as i32)
+        .bind(whole_word as i32)
+        .execute(&self.pool)
         .await?;
-        Ok(rows)
+        Ok(result.last_insert_rowid())
     }
 
-    pub async fn delete_conversation(
-        &self,
-        conversation_id: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM conversations WHERE id = $1")
-            .bind(conversation_id)
+    pub async fn delete_dictionary_entry(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM dictionary WHERE id = $1")
+            .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    // ---- Snippets ----
+
+    pub async fn list_snippets(&self) -> Result<Vec<SnippetRow>, sqlx::Error> {
+        sqlx::query_as::<_, SnippetRow>(
+            "SELECT id, trigger, expansion, description, created_at FROM snippets ORDER BY trigger",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn add_snippet(
+        &self,
+        trigger: &str,
+        expansion: &str,
+        description: &Option<String>,
+    ) -> Result<i64, sqlx::Error> {
+        let result = sqlx::query(
+            "INSERT INTO snippets (trigger, expansion, description) VALUES ($1, $2, $3)",
+        )
+        .bind(trigger)
+        .bind(expansion)
+        .bind(description)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn delete_snippet(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM snippets WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ---- App profiles ----
+
+    pub async fn list_app_profiles(&self) -> Result<Vec<AppProfileRow>, sqlx::Error> {
+        sqlx::query_as::<_, AppProfileRow>(
+            "SELECT id, app_name, app_identifier, style, ai_cleanup, auto_punctuation, created_at FROM app_profiles ORDER BY app_name",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn add_app_profile(
+        &self,
+        app_name: &str,
+        app_identifier: &Option<String>,
+        style: &str,
+        ai_cleanup: bool,
+        auto_punctuation: bool,
+    ) -> Result<i64, sqlx::Error> {
+        let result = sqlx::query(
+            "INSERT INTO app_profiles (app_name, app_identifier, style, ai_cleanup, auto_punctuation) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(app_name)
+        .bind(app_identifier)
+        .bind(style)
+        .bind(ai_cleanup as i32)
+        .bind(auto_punctuation as i32)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn delete_app_profile(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM app_profiles WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ---- Transcripts ----
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_transcript(
+        &self,
+        raw_text: &str,
+        cleaned_text: &str,
+        app_name: &Option<String>,
+        duration_ms: i64,
+        audio_ms: i64,
+        model_used: &str,
+    ) -> Result<i64, sqlx::Error> {
+        let timestamp = chrono::Utc::now().timestamp();
+        let result = sqlx::query(
+            "INSERT INTO transcripts (timestamp, raw_text, cleaned_text, app_name, duration_ms, audio_ms, model_used) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(timestamp)
+        .bind(raw_text)
+        .bind(cleaned_text)
+        .bind(app_name)
+        .bind(duration_ms)
+        .bind(audio_ms)
+        .bind(model_used)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Aggregate usage figures for the Insights view.
+    pub async fn stats(&self) -> Result<UsageStats, sqlx::Error> {
+        let rows = sqlx::query_as::<_, (String, i64, i64)>(
+            "SELECT COALESCE(cleaned_text, raw_text), audio_ms, timestamp FROM transcripts",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut total_words = 0i64;
+        let mut total_audio_ms = 0i64;
+        let today_start = chrono::Utc::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .map(|d| d.and_utc().timestamp())
+            .unwrap_or(0);
+        let mut words_today = 0i64;
+
+        for (text, audio_ms, ts) in &rows {
+            let words = text.split_whitespace().count() as i64;
+            total_words += words;
+            total_audio_ms += audio_ms;
+            if *ts >= today_start {
+                words_today += words;
+            }
+        }
+
+        // Only count sessions that actually recorded a duration, so early rows written
+        // before audio_ms existed don't drag the rate toward zero.
+        let timed_words: i64 = rows
+            .iter()
+            .filter(|(_, audio_ms, _)| *audio_ms > 0)
+            .map(|(t, _, _)| t.split_whitespace().count() as i64)
+            .sum();
+        let words_per_minute = if total_audio_ms > 0 {
+            (timed_words as f64 / (total_audio_ms as f64 / 60_000.0)).round() as i64
+        } else {
+            0
+        };
+
+        // Distinct days with at least one dictation, most recent first.
+        let mut days: Vec<i64> = rows.iter().map(|(_, _, ts)| ts / 86_400).collect();
+        days.sort_unstable();
+        days.dedup();
+
+        Ok(UsageStats {
+            total_dictations: rows.len() as i64,
+            total_words,
+            words_today,
+            words_per_minute,
+            total_audio_ms,
+            active_days: days.len() as i64,
+        })
+    }
+
+    pub async fn list_transcripts(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TranscriptRow>, sqlx::Error> {
+        sqlx::query_as::<_, TranscriptRow>(
+            "SELECT id, timestamp, raw_text, cleaned_text, app_name, duration_ms, audio_ms, model_used, created_at
+             FROM transcripts ORDER BY timestamp DESC LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn clear_transcripts(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM transcripts").execute(&self.pool).await?;
         Ok(())
     }
 }
@@ -201,31 +292,66 @@ impl Database {
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SettingsRow {
     pub id: i32,
-    pub hotkey: Option<String>,
-    pub hotkey_mode: Option<String>,
-    pub whisper_model: Option<String>,
-    pub openrouter_key: Option<String>,
-    pub openrouter_model: Option<String>,
+    pub hotkey: String,
+    pub hotkey_mode: String,
+    pub whisper_model: String,
+    pub mic_device: Option<String>,
     pub ai_cleanup_enabled: i32,
-    pub auto_punctuation: i32,
-    pub language: Option<String>,
-    pub theme: Option<String>,
+    pub remove_fillers: i32,
+    pub language: String,
+    pub theme: String,
     pub start_at_login: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ConversationRow {
-    pub id: String,
-    pub title: String,
-    pub created_at: String,
-    pub updated_at: String,
+pub struct DictionaryRow {
+    pub id: i64,
+    pub word: String,
+    pub replacement: String,
+    pub case_sensitive: i32,
+    pub whole_word: i32,
+    pub created_at: i64,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct MessageRow {
-    pub id: String,
-    pub conversation_id: String,
-    pub role: String,
-    pub content: String,
-    pub created_at: String,
+pub struct SnippetRow {
+    pub id: i64,
+    pub trigger: String,
+    pub expansion: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct AppProfileRow {
+    pub id: i64,
+    pub app_name: String,
+    pub app_identifier: Option<String>,
+    pub style: String,
+    pub ai_cleanup: i32,
+    pub auto_punctuation: i32,
+    pub created_at: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct UsageStats {
+    pub total_dictations: i64,
+    pub total_words: i64,
+    pub words_today: i64,
+    pub words_per_minute: i64,
+    pub total_audio_ms: i64,
+    pub active_days: i64,
+}
+
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TranscriptRow {
+    pub id: i64,
+    pub timestamp: i64,
+    pub raw_text: String,
+    pub cleaned_text: Option<String>,
+    pub app_name: Option<String>,
+    pub duration_ms: i64,
+    pub audio_ms: i64,
+    pub model_used: Option<String>,
+    pub created_at: i64,
 }

@@ -1,12 +1,20 @@
 -- 001_initial.sql
--- Core tables for AuraScribe
+-- Core tables for AuraScribe (local-first dictation: no cloud keys, nothing to encrypt)
 
 CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    encrypted INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    hotkey TEXT NOT NULL DEFAULT 'Ctrl+Space',
+    hotkey_mode TEXT NOT NULL DEFAULT 'toggle',
+    whisper_model TEXT NOT NULL DEFAULT 'base.en',
+    mic_device TEXT,
+    ai_cleanup_enabled INTEGER NOT NULL DEFAULT 1,
+    remove_fillers INTEGER NOT NULL DEFAULT 1,
+    language TEXT NOT NULL DEFAULT 'en',
+    theme TEXT NOT NULL DEFAULT 'dark',
+    start_at_login INTEGER NOT NULL DEFAULT 0
 );
+
+INSERT OR IGNORE INTO settings (id) VALUES (1);
 
 CREATE TABLE IF NOT EXISTS dictionary (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,8 +45,7 @@ CREATE TABLE IF NOT EXISTS app_profiles (
     app_name TEXT NOT NULL,
     app_identifier TEXT,
     style TEXT NOT NULL DEFAULT 'casual',
-    custom_prompt TEXT,
-    ai_cleanup INTEGER NOT NULL DEFAULT 0,
+    ai_cleanup INTEGER NOT NULL DEFAULT 1,
     auto_punctuation INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
@@ -58,16 +65,3 @@ CREATE TABLE IF NOT EXISTS transcripts (
 
 CREATE INDEX IF NOT EXISTS idx_transcripts_timestamp ON transcripts(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_transcripts_app ON transcripts(app_name);
-
--- Default settings
-INSERT OR IGNORE INTO settings (key, value, encrypted) VALUES
-    ('hotkey', 'Ctrl+Space', 0),
-    ('hotkey_mode', 'press-hold', 0),
-    ('whisper_model', 'base.en', 0),
-    ('openrouter_key', '', 1),
-    ('openrouter_model', 'nvidia/nemotron-3-ultra', 0),
-    ('ai_cleanup_enabled', 'false', 0),
-    ('auto_punctuation', 'true', 0),
-    ('language', 'en', 0),
-    ('theme', 'system', 0),
-    ('start_at_login', 'false', 0);

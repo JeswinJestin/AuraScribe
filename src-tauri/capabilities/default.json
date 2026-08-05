@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the settings window and the recording overlay. Custom AuraScribe commands are app-defined and not ACL-gated; this grants the core event/window access the frontend needs plus the one plugin still in use (global-shortcut).",
+  "windows": ["main", "overlay"],
+  "permissions": [
+    "core:default",
+    "global-shortcut:default"
+  ]
+}

@@ -1,0 +1,6 @@
+# whisper-rs-sys bundles a whisper.cpp whose CMakeLists.txt declares a
+# cmake_minimum_required below 3.5, which CMake 4.x refuses to configure.
+# Setting this here (rather than expecting each developer to export it) keeps
+# `cargo build` working out of the box on modern CMake installs.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
