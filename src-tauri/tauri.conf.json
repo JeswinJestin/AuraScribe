@@ -12,32 +12,29 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "AuraScribe",
-        "width": 480,
-        "height": 720,
-        "minWidth": 400,
-        "minHeight": 600,
+        "width": 1480,
+        "height": 936,
+        "minWidth": 860,
+        "minHeight": 560,
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
         "transparent": false,
-        "visible": true,
+        "visible": false,
         "center": true,
         "alwaysOnTop": false,
         "skipTaskbar": false
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true
-    },
     "security": {
-      "csp": "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://openrouter.ai https://api.openai.com https://*.openai.com;"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost;"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "dmg", "deb", "appimage"],
+    "targets": ["nsis", "dmg", "deb", "appimage"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
