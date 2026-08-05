@@ -59,7 +59,7 @@ export function DictionaryView() {
             <span className="mb-1 block text-xs font-medium">Heard as</span>
             <input
               className="input"
-              placeholder="jeswin"
+              placeholder="kubernetes"
               value={word}
               onChange={(e) => setWord(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
@@ -70,7 +70,7 @@ export function DictionaryView() {
             <span className="mb-1 block text-xs font-medium">Written as</span>
             <input
               className="input"
-              placeholder="Jeswin"
+              placeholder="Kubernetes"
               value={replacement}
               onChange={(e) => setReplacement(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
