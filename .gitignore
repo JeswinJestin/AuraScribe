@@ -23,6 +23,8 @@ dist/
 build/
 .next/
 src-tauri/gen/
+*.tsbuildinfo
+next-env.d.ts
 
 # Environment
 .env
@@ -41,3 +43,18 @@ Thumbs.db
 *.swp
 *.swo
 *~.nib
+# Agent / assistant local state — can contain machine paths, transcripts and settings
+.claude/
+.claude/**
+CLAUDE.local.md
+*.local.json
+.aider*
+.cursor/
+
+# Local scratch
+scratchpad/
+*.log
+tmp/
+
+# Anything that identifies this machine
+.window-state.json

@@ -1,241 +1,176 @@
 # AuraScribe
 
-Free, open-source, privacy-first voice dictation that works everywhere. Based on Whisper.cpp with AI-powered text cleanup.
+Free, open-source, local-first voice dictation. Press a hotkey, speak, and clean punctuated text appears at your cursor in any app — no account, no subscription, no cloud.
 
 ![AuraScribe](https://img.shields.io/badge/version-1.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 ## ✨ Features
 
-- 🎤 **Real-time Transcription**: Stream speech-to-text with Whisper.cpp (39MB - smallest model)
-- 🤖 **AI Text Cleanup**: Automated punctuation, grammar fixing, and filler removal with OpenRouter
-- 🔒 **Privacy First**: Everything runs locally. No data leaves your device
-- ⚡ **Zero Latency**: Uses Silero VAD for responsive voice detection
-- 🎨 **Customizable**: Create app profiles, snippets, and custom keyboard shortcuts
-- 💾 **Auto-save**: All settings and transcripts stored in encrypted SQLite database
+- 🎤 **On-device transcription** — Whisper.cpp runs locally; audio never leaves your machine
+- ✨ **Automatic cleanup, on by default** — strips filler words, fixes punctuation and sentence casing, all locally
+- ⌨️ **Global hotkey** — push-to-talk or toggle mode, rebindable
+- 📋 **Types at your cursor** — text is injected into whatever app has focus
+- 🔕 **Lives in the tray** — no persistent window; icon shows idle / listening / processing
+- 🆓 **Free forever** — no tiers, no word caps, no account, no telemetry
+
+## 🔒 Privacy
+
+This is the whole story, and it's checkable in the source:
+
+- Audio is transcribed **on-device** by Whisper.cpp. It is never uploaded.
+- The cleanup pass is **plain local string processing** ([`cleanup.rs`](src-tauri/src/cleanup.rs)) — not an LLM, not a network call.
+- **The only network request the app ever makes is downloading a Whisper model** from HuggingFace, once, when you choose one.
+- No telemetry, no analytics, no crash reporting.
+
+After the model is downloaded, dictation works fully offline — you can verify by turning off Wi-Fi.
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Node.js** (18+ version)
+Building from source requires:
+
+- **Node.js** 18+
 - **Rust** (stable, with Cargo)
-- **npm** or **yarn** for package management
+- **LLVM/libclang** — needed by `whisper-rs` bindgen (`winget install LLVM.LLVM`)
+- **CMake** — needed to compile whisper.cpp (`winget install Kitware.CMake`)
+- **MSVC build tools** (Visual Studio Build Tools with the C++ workload)
+
+Set `LIBCLANG_PATH` to your LLVM `bin` directory (e.g. `C:\Program Files\LLVM\bin`).
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/JeswinJestin/AuraScribe.git
-cd AuraScribe
-
-# Install dependencies
-npm install
-
-# Build and run the application
-npm run build
 ```
+
+```bash
+npm install
+```
+
+```bash
+dev.bat
+```
+
+`dev.bat` puts MSVC, libclang and CMake on `PATH` before running `tauri dev`; a bare
+`npm run dev` fails with `Unable to find libclang`. For a release build and installer, use
+`build.bat`.
+
+The first build compiles whisper.cpp from source and takes several minutes.
 
 ### First Run
 
-1. **Download Whisper Model**: The app will download the base model (~74MB) automatically on first use
-2. **Configure Hotkey**: Press `Ctrl+Space` (default) to start dictation
-3. **Enable AI Cleanup** (Optional): Get a free API key from [OpenRouter](https://openrouter.ai/keys) for enhanced text cleanup
+1. AuraScribe opens its window on launch, and keeps running **in the system tray** when you
+   close it — click the tray icon any time to bring it back
+2. Under **Whisper Model**, download one (`large-v3-turbo-q5_0`, ~574 MB, is recommended;
+   `base.en`, ~142 MB, is the lighter option)
+3. Set your hotkey (default `Ctrl+Shift+Space`) and choose push-to-talk or toggle mode
+4. Place your cursor in any text field, press the hotkey, speak, press again
 
 ## 🎯 Usage
 
-### Basic Dictation
-1. Open any text editor/IDE/browser
-2. Press your hotkey (Ctrl+Space) and hold
-3. Speak naturally
-4. Release the hotkey to insert your text
+1. Put your cursor where you want the text
+2. Hold your hotkey (or press once in toggle mode)
+3. Speak
+4. Release (or press again)
 
-### Advanced Features
-
-**AI Text Cleanup**
-```bash
-npm run build
-```
-
-Or run dev mode:
-```bash
-npm run dev
-```
-
-### First Setup
-1. Open preferences (Settings tab)
-2. Select your preferred Whisper model:
-   - `base.en` (74MB) - Recommended for English
-   - `small` (244MB) - Better accuracy, bilingual
-3. Enable AI cleanup for automated text enhancement
-
-## 📦 Build Setup
-
-```bash
-# Build for production
-npm run build
-
-# Build only frontend
-npm run build:frontend
-
-# Test
-npm run test
-```
+Cleaned text is typed at your cursor. That's the whole flow.
 
 ## 🏗️ Architecture
 
-AuraScribe uses a modern tech stack:
-
-- **Frontend**: Next.js 14 + React 18 + TypeScript
+- **Frontend**: Next.js 14 + React 18 + TypeScript (settings window and recording overlay only)
 - **Backend**: Tauri 2 + Rust
-- **Core Technologies**: Whisper.cpp, Silero VAD, OpenRouter API
+- **Transcription**: Whisper.cpp via `whisper-rs`, running in-process
+- **Audio capture**: `cpal`
+- **Storage**: local SQLite via `sqlx`
 
 ### Project Structure
 
 ```
 aurascribe/
-├── src-tauri/           # Rust backend
-│   ├── src/
-│   │   ├── asr.rs       # Whisper.cpp integration
-│   │   ├── vad.rs       # Voice Activity Detection
-│   │   ├── audio.rs     # Audio capture
-│   │   ├── injection.rs # Text injection into apps
-│   │   ├── db.rs        # SQLite database
-│   │   └── commands.rs  # Tauri commands
-├── src/app/             # Next.js frontend
-│   ├── app/             # App router (page.tsx, layout.tsx)
-│   └── lib/             # Shared utilities
+├── src-tauri/               # Rust backend
+│   ├── migrations/          # SQLite schema
+│   └── src/
+│       ├── asr.rs           # Whisper.cpp integration
+│       ├── cleanup.rs       # Local text cleanup pass
+│       ├── audio.rs         # Audio capture + resampling
+│       ├── hotkey.rs        # Global hotkey registration
+│       ├── injection.rs     # Text injection (Windows SendInput)
+│       ├── tray.rs          # Tray icon states
+│       ├── overlay.rs       # Recording indicator window
+│       ├── db.rs            # SQLite access
+│       └── commands.rs      # Tauri command surface
+├── src/app/                 # Next.js frontend
 └── README.md
 ```
 
 ## 🎨 Models
 
-### Whisper.cpp Models
+Downloaded once, then used entirely offline. Stored under your local app data directory,
+in `AuraScribe/models/`.
 
-Each model can be downloaded once and used offline:
+Sizes below are the actual download size.
 
-| Model | Size | Language | Speed | Quality | Status |
-|-------|------|----------|-------|---------|--------|
-| `tiny.en` | 39MB | English | Fastest | Good | ✅ Recommended |
-| `base.en` | 74MB | English | Fast | Better | ✅ Default |
-| `small` | 244MB | Bilingual | Balanced | Great | 🌟 Advanced |
-| `medium` | 769MB | Multilingual | Slow | Excellent | 🔥 Pro |
+| Model | Size | Language | Speed | Quality |
+|-------|------|----------|-------|---------|
+| `tiny.en` | ~75 MB | English | Fastest | Good |
+| `base.en` | ~142 MB | English | Fast | Better |
+| `large-v3-turbo-q5_0` | ~574 MB | Multilingual | Fast | Excellent — **recommended** |
+| `large-v3-turbo` | ~1.6 GB | Multilingual | Moderate | Excellent |
+| `large-v3` | ~3.1 GB | Multilingual | Slowest | Best |
 
-**Storage**: Models are downloaded to `~/.local/share/AuraScribe/models/` (or equivalent)
-
-### OpenRouter Free Models
-
-For AI text cleanup, use these free models:
-- **Nemotron 3 Ultra** (4K context)
-- **Llama 3.1 8B** (8K context)
-- **Gemma 2 9B** (8K context)
-
-All models have free tiers perfect for personal use.
-
-## 🔧 Configuration
-
-### Environment Variables
-
-Create `.env.local` for frontend configuration:
-
-```bash
-# UI Configuration
-NEXT_PUBLIC_APP_NAME=AuraScribe
-NEXT_PUBLIC_DEFAULT_THEME=dark
-```
-
-### Tauri Configuration
-
-Edit `src-tauri/tauri.conf.json` to customize:
-
-```json
-{
-  "bundle": {
-    "identifier": "dev.aurascribe.aurascribe",
-    "resources": []
-  },
-  "security": {
-    "csp": null
-  }
-}
-```
-
-## 📝 API Integration
-
-### OpenRouter Setup
-
-1. Get free API key at [OpenRouter](https://openrouter.ai/keys)
-2. Store securely in app settings (encrypted locally)
-
-### Rate Limiting
-
-OpenRouter free models have generous limits (~10RPM). For production use:
-- Cache generated text locally
-- Batch multiple words for cleaner results
-- Use native Whisper transcription first
+`small.en` and `medium` are deliberately not offered: `large-v3-turbo-q5_0` is smaller,
+faster *and* more accurate than `small.en`, so listing them would only offer a worse choice.
 
 ## 🐛 Troubleshooting
 
-**Issue: Model won't download**
-```bash
-# Manually download model from HuggingFace:
-# https://huggingface.co/ggerganov/whisper.cpp/tree/main
+**Model won't download**
 
-# Then copy to: 
-# ~/.local/share/AuraScribe/models/
-```
+Download the `ggml-<model>.bin` file manually from
+[HuggingFace](https://huggingface.co/ggerganov/whisper.cpp/tree/main) and place it in the
+`AuraScribe/models/` folder under your local app data directory.
 
-**Issue: Audio not working**
-1. Check system microphone permissions
-2. Verify audio device selected in system settings
-3. Ensure both `audio` and `sys-uio` permissions granted
+**Audio not working**
 
-**Issue: Text injection not working**
-1. Ensure accessibility permissions granted (Windows)
-2. Check app is in window focus
-3. Try different injection method (keyboard vs pasteboard)
+1. Check the microphone is allowed in Windows privacy settings
+2. Pick the specific device under Settings → Microphone instead of "System default"
+
+**Text isn't appearing at the cursor**
+
+Some applications run elevated and reject synthetic keyboard input from non-elevated
+processes. In that case AuraScribe copies the text to your clipboard instead and tells you
+so — paste with `Ctrl+V`.
+
+## 🗺️ Platform support
+
+Windows is fully supported today. macOS and Linux build targets exist, but text injection
+and permission handling are **not yet implemented** on those platforms — they return an
+explicit error rather than silently doing nothing. Contributions welcome.
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how to get started:
-
 1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-new-feature`
+2. Create a feature branch: `git checkout -b feature/your-feature`
 3. Make your changes
-4. Run tests: `npm test`
-5. Build: `npm run build`
-6. Commit: `git commit -am 'Add amazing-new-feature'`
-7. Push: `git push origin feature/amazing-new-feature`
-8. Open a Pull Request
-
-### Development Guidelines
-
-- Use TypeScript strict mode
-- Follow existing code style
-- Add tests for new features
-- Update documentation where needed
+4. Run `cargo test` and `npm run typecheck`
+5. Open a Pull Request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## 🙏 Acknowledgments
 
-- [Whisper.cpp](https://github.com/openai/whisper.cpp) - High-performance Whisper implementation
-- [Silero VAD](https://github.com/snakers4/silero-vad) - Voice Activity Detection algorithm
-- [Tauri](https://tauri.app/) - Secure desktop framework
-- [Next.js](https://nextjs.org/) - React framework
-- [OpenRouter](https://openrouter.ai/) - Access to open AI models
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — high-performance Whisper inference
+- [whisper-rs](https://github.com/tazz4843/whisper-rs) — Rust bindings
+- [Tauri](https://tauri.app/) — desktop framework
+- [Next.js](https://nextjs.org/) — React framework
 
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/JeswinJestin/AuraScribe/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/JeswinJestin/AuraScribe/discussions)
-- **Email**: [jeswinjestin@example.com](mailto:jeswinjestin@example.com)
 
-## 🌟 Star History
-
-If you find this project useful, please consider giving it a star ⭐
-
-**Made with ❤️ by the open-source community**
+If you find this useful, consider giving it a star ⭐

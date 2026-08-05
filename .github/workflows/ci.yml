@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Deliberately frontend-only.
+#
+# The Rust side compiles whisper.cpp from source and needs MSVC, libclang and CMake. That is
+# a real 5-10 minute native build, and `--no-default-features` does not currently skip it
+# (`asr.rs` imports `whisper_rs` unconditionally, so the `whisper` feature flag does not
+# actually gate anything). Rather than ship a workflow that goes red on every push, this runs
+# the checks that genuinely pass; the Rust build and tests are verified locally with
+# `build.bat` and `cargo test`. See docs/HANDOFF.md.
+#
+# A green tick here means "the frontend typechecks and builds" — nothing more. Adding a Rust
+# job is worthwhile once the feature flag really gates the dependency.
+
+jobs:
+  frontend:
+    name: Typecheck and build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build frontend
+        run: npm run build:frontend

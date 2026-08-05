@@ -3,366 +3,174 @@
 ## 🛠️ Development Setup
 
 ### System Requirements
-- **Node.js** (18+ with npm/pnpm/yarn)
-- **Rust** (stable latest)
-- **Git** for version control
-- **Make** (optional, for build automation)
-- **VS Code** (recommended)
 
-### Installation Steps
+- **Node.js** 18+ with npm
+- **Rust** (stable, via rustup)
+- **LLVM / libclang** — `whisper-rs` uses bindgen, which needs libclang
+- **CMake** — whisper.cpp is compiled from source
+- **MSVC Build Tools** — Visual Studio Build Tools with the "Desktop development with C++" workload
+
+### Windows setup
 
 ```bash
-# 1. Install Rust (if not already installed)
-# Install Rust using rustup
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+winget install LLVM.LLVM
+```
 
-# 2. Install Node.js (version 18+)
-# Download from: https://nodejs.org/
+```bash
+winget install Kitware.CMake
+```
 
-# 3. Clone and set up project
-git clone https://github.com/JeswinJestin/AuraScribe.git
-cd AuraScribe
+Then set `LIBCLANG_PATH` so bindgen can find libclang:
 
-# 4. Install frontend dependencies
+```bash
+setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
+```
+
+Open a new terminal afterwards so the variable and the updated `PATH` take effect.
+
+> **Note:** `src-tauri/.cargo/config.toml` sets `CMAKE_POLICY_VERSION_MINIMUM=3.5`. The
+> whisper.cpp bundled by `whisper-rs-sys` declares a `cmake_minimum_required` below 3.5,
+> which CMake 4.x refuses to configure without it. Don't remove this unless whisper-rs is
+> upgraded to a version bundling a newer whisper.cpp.
+
+### Install and run
+
+```bash
 npm install
+```
 
-# 5. Install Rust dependencies (in separate terminal)
-cd src-tauri
-cargo install cargo-audit
-cargo install cargo-expand
-cargo install cargo-edit
-
-# 6. Build and run
-cd ..
+```bash
 npm run dev
 ```
+
+The first build compiles whisper.cpp and takes several minutes. Later builds are fast.
 
 ## 🚀 Development Workflow
 
-### Start Development Server
+### Commands
 
 ```bash
-# In AuraScribe root directory
 npm run dev
 ```
 
-This will:
-1. Start Next.js development server (http://localhost:3000)
-2. Build Tauri backend with live reload
-3. Open desktop application
-
-### Build for Production
-
 ```bash
-# Full build
 npm run build
-
-# Build only frontend (for testing)
-npm run build:frontend
 ```
 
-### Code Quality Checks
-
 ```bash
-# TypeScript type checking
 npm run typecheck
-
-# Linting
-npm run lint
-
-# Run tests
-npm run test
 ```
-
-## 📦 Package Management
-
-### Common NPM Commands
 
 ```bash
-# Start development
-npm run dev
-
-# Build all packages
-npm run build
-
-# Clean build artifacts
-npm run clean
-
-# Format code
-npm run format
-
-# Check for vulnerabilities
-cargo audit
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+### Note on the app window
+
+AuraScribe starts hidden in the system tray — this is intentional (`visible: false` in
+`tauri.conf.json`). Click the tray icon to open the settings window. Closing that window
+hides it rather than quitting; use the tray menu's Quit item to exit.
+
+## 🏛️ Architecture notes
+
+### The dictation pipeline
+
+`hotkey.rs` (or the mic button) → `commands::start_recording` → `cpal` captures f32 mono
+samples into `AppState::audio_buffer` → `commands::stop_recording` →
+`audio::resample_linear` to 16kHz → `asr::WhisperASR::transcribe` (on a blocking thread) →
+`cleanup::clean` → `injection::TextInjector::inject_text` → SQLite `transcripts` row.
+
+Status changes flow through `commands::emit_status`, which is the single place that
+updates the tray icon, shows/hides the overlay, and emits `status-changed` to the frontend.
+If you add a new state transition, route it through there so all three stay in sync.
+
+### Local-first constraint
+
+The only outbound network request in the entire app is the Whisper model download in
+`asr::WhisperASR::download_model`. Cleanup is deterministic local string processing in
+`cleanup.rs` — deliberately not an LLM call, both for privacy and because a network round
+trip would dominate the latency budget. Please keep it that way; the CSP in
+`tauri.conf.json` is intentionally restrictive to make regressions obvious.
+
+### Permissions (Tauri v2 ACL)
+
+`src-tauri/capabilities/default.json` grants the frontend the core and plugin permissions
+it needs. Custom commands registered in `generate_handler!` are app-defined and are *not*
+ACL-gated for local origins, so adding a new command needs no capability change. Adding a
+new **plugin** does.
 
 ## 🐛 Debugging
 
-### Frontend Debugging
+### Backend logs
 
-```javascript
-// Add console.log everywhere
-console.log('Debug message', data);
-
-// Use React DevTools for component analysis
-// Chrome: F12 → React tab
-```
-
-### Backend Debugging
-
-```rust
-// Rust Tauri commands
-#[tauri::command]
-async fn example_function(app: tauri::AppHandle) -> Result<String> {
-    tracing::info!("Function called");
-    // Your code here
-    Ok("Hello".to_string())
-}
-```
-
-### Toggle Debug Mode
-
-Create `.env.local` for environment-specific settings:
-```bash
-DEBUG=true
-ZUSE_DEVELOPMENT=true
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-
-Create `.env.local` in root for frontend configuration:
+Logging goes through `tracing`. Adjust verbosity with `RUST_LOG`:
 
 ```bash
-# UI Settings
-NEXT_PUBLIC_APP_NAME=AuraScribe
-NEXT_PUBLIC_DEFAULT_THEME=dark
-NEXT_PUBLIC_DEFAULT_MODEL=base.en
-
-# Development vs Production
-NODE_ENV=development
+RUST_LOG=aurascribe=trace npm run dev
 ```
 
-### Tauri Configuration
+### Frontend
 
-Edit `src-tauri/tauri.conf.json` to customize:
+Right-click in the app window → Inspect Element opens devtools in dev builds.
 
-```json
-{
-  "bundle": {
-    "active": true,
-    "icon": ["icons/icon.png"],
-    "identifier": "dev.aurascribe.aurascribe"
-  },
-  "security": {
-    "csp": null,
-    "dangerousRemoteDomainIpcAccess": []
-  }
-}
-```
+### Database
 
-### Database Configuration
+SQLite lives at `%LOCALAPPDATA%\AuraScribe\aurascribe.db` on Windows. Schema is in
+`src-tauri/migrations/` and applied via `sqlx::migrate!` at startup. To reset state, quit
+the app and delete that file.
 
-Database location: `~/.local/share/AuraScribe/aurascribe.db`
-
-Connection string in `src-tauri/src/db.rs`:
-
-```rust
-let db_path = data_dir.join("aurascribe.db");
-let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-```
-
-## 🔍 Troubleshooting Common Issues
-
-### Issue: Rust dependencies failing to install
-```bash
-# Reset Rust registry
-rustup update
-
-# Clean cargo cache
-cargo clean
-
-# Reinstall dependencies
-cargo update
-
-# Try fresh install
-cargo install --verbose [package-name]
-```
-
-### Issue: TypeScript type errors
-```bash
-# Install missing types
-npm install --save-dev @types/node @types/react @types/react-dom
-
-# Clear build cache
-npm run clean
-npm install
-```
-
-### Issue: Build fails due to too large models
-```bash
-# Delete models directory
-rm -rf ~/.local/share/AuraScribe/models/
-
-# Re-download only base model
-# (app will auto-download on next start)
-```
-
-### Issue: Tauri icons not showing
-```bash
-# Convert SVG to PNG
-# Use: https://cloudconvert.com/svg-to-png
-
-# Update tauri.conf.json paths
-"icon": "icons/icon.png"
-```
-
-## 📊 Performance Optimization
-
-### Frontend Optimization
-
-```javascript
-// Debounce expensive operations
-const debounced = _.debounce(callback, 300);
-
-// Lazy load heavy components
-const Component = React.lazy(() => import('./HeavyComponent'));
-```
-
-### Backend Optimization
-
-```rust
-// Use Arc for shared state (already implemented)
-let context: Arc<Mutex<SomeState>> = Arc::new(Mutex::new(init_state));
-
-// Use async for I/O operations
-async fn process_data() -> Result<()> { ... }
-```
-
-### Model Optimization
-
-```rust
-// Choose appropriate model size based on needs
-// base.en (74MB) - Recommended for development
-// small (244MB) - Better accuracy
-```
+Models are stored separately under `AuraScribe/models/` in your data directory.
 
 ## 🧪 Testing
 
-### Unit Tests
-
-```javascript
-// In component files
-it('should render correctly', () => {
-  render(<Dashboard />);
-  expect(screen.getByText('Test')).toBeInTheDocument();
-});
-```
-
-### Feature Testing
+`cleanup.rs` has unit tests covering the text-transformation rules — these are the cheapest
+thing to test and the most likely to regress, so add cases there when you change cleanup
+behavior.
 
 ```bash
-# Run all tests
-npm run test
-
-# Run specific test file
-npm run test test/some-test-file
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-### Manual Testing Checklist
+### Manual testing checklist
 
-- [ ] Model downloads correctly
-- [ ] Transcription works in different apps
-- [ ] AI cleanup processes text properly
-- [ ] Settings persist correctly
-- [ ] Hotkey works as expected
-- [ ] Database encryption/decryption works
-- [ ] Error handling displays properly
+- [ ] Model downloads, with progress shown
+- [ ] Model auto-loads on next launch without revisiting Settings
+- [ ] Hotkey works in both push-to-talk and toggle modes
+- [ ] Text lands at the cursor in Notepad, a browser field, and a code editor
+- [ ] Tray icon shows idle → listening → processing → idle
+- [ ] Overlay appears while recording and disappears afterwards
+- [ ] Settings persist across a restart
+- [ ] Dictation still works with Wi-Fi off (after the model is downloaded)
 
 ## 🤝 Code Style
 
-### Frontend (TypeScript/React)
+### Rust
 
-- Follow existing code style in project
-- Use TypeScript strict mode
-- Add JSDoc comments for complex functions
-- Keep components functional and declarative
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml
+```
 
-### Backend (Rust)
+```bash
+cargo clippy --manifest-path src-tauri/Cargo.toml
+```
 
-- Use `rustfmt` for formatting: `cargo fmt`
-- Run clippy: `cargo clippy`
-- Follow Rust API guidelines
-- Add detailed docs in comments
+### TypeScript
+
+- Strict mode is on; keep it that way
+- All IPC goes through `src/lib/ipc.ts` — don't call `invoke` directly from components, so
+  the command surface stays in one auditable place
 
 ## 📝 Git Workflow
 
-### Branch Strategy
-
 ```bash
-# Main development branch
-main
-
-# Feature branches
-feature/[summary]
-fix/[bug-description]
-docs/[documentation-update]
-test/[testing-addition]
+git checkout -b feature/your-feature
 ```
 
-### Commit Messages
-
-```bash
-# Good commit message
-feat: add model caching for faster transcription
-fix: resolve audio capture permission issue
-docs: update setup instructions
-```
-
-## 🚀 Deployment Steps
-
-1. **Clean build**: `npm run clean && npm run build`
-2. **Run tests**: `npm run test`
-3. **Run linter**: `npm run lint`
-4. **Create dist**: Check `dist/` folder exists
-5. **Package**: `npm run tauri build`
-6. **Sign builds**: Configure certificate in `tauri.conf.json`
-7. **Test**: Deploy to staging environment
-8. **Release**: Create GitHub release with binaries
+Commit messages follow conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`).
 
 ## 🔗 Useful Links
 
-- **Tauri Docs**: https://tauri.app/v1/guides/
-- **Whisper.cpp Issues**: https://github.com/openai/whisper.cpp/issues
-- **Next.js Docs**: https://nextjs.org/docs
-- **Rust Book**: https://doc.rust-lang.org/book/
-- **SQLCipher**: https://www.zetetic.net/sqlcipher/
-
-## 📧 Getting Help
-
-Before submitting issues, please:
-1. Search existing issues
-2. Check troubleshooting section above
-3. Provide error logs and reproduction steps
-4. Include system information (OS, Node version, Rust version)
-
-**Good issue template**:
-```markdown
-**System Info**
-- OS: [e.g., Windows 11]
-- Node: [e.g., 18.17.0]
-- Rust: [e.g., stable (1.70.0)]
-
-**Steps to Reproduce**
-1. Do this...
-2. Then do this...
-
-**Expected Behavior**
-Text should appear...
-
-**Actual Behavior**
-Error: [error message]
-
-**Log Output**
-[actual logs]
-```
+- [Tauri v2 docs](https://v2.tauri.app/)
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+- [whisper-rs](https://github.com/tazz4843/whisper-rs)
+- [cpal](https://github.com/RustAudio/cpal)
