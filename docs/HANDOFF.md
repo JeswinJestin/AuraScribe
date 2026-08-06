@@ -5,10 +5,36 @@
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
 **Last updated:** 2026-08-06
-**Status:** Working end-to-end on Windows (~4.6 MB installer, Whisper-only default). The
-**Moonshine speed engine is built and integrated behind the `moonshine` feature** (compiles
-both ways); it is not in the default build yet — see Round 14 for why and the open decision.
-Glass appearance is now dark-vibrancy. **Owner:** Jeswin Thomas Jestin
+**Status:** Working end-to-end on Windows (Whisper default). New multilingual Whisper models
+(`small-q5_1`, `large-v3-turbo-q5_0`) added — accuracy upgrade that runs today. The
+**Moonshine speed engine is built behind the `moonshine` feature but does NOT run yet**
+(startup crash, CRT mismatch — Round 14). Glass appearance is dark-vibrancy. **Owner:** Jeswin
+Thomas Jestin
+
+### Round 15 (2026-08-06) — Multilingual Whisper models added; version-confusion cleared
+
+Added `small-q5_1` (190 MB) and `large-v3-turbo-q5_0` (574 MB) to the Whisper catalogue —
+both multilingual, both running through the existing whisper.cpp engine (no new native code,
+no crash). They are the pragmatic "next version" accuracy/multilingual upgrade that works on
+Windows now; the Moonshine speed engine remains blocked on the Round-14 CRT fix. On a CPU
+these bigger models are more accurate but slower; the model list's per-clip wait/warning makes
+the trade explicit. `cpu_cost` values are estimates pending a real benchmark.
+
+**Process note / a scare worth recording.** While iterating, the running app was swapped
+between builds (I stopped the running `target/release` exe to test the Moonshine dev build,
+which crashed). With those gone, a **stale installed copy at `C:\Program Files\AuraScribe`**
+surfaced — an older "first version" UI — and the owner reasonably thought the interface had
+been reverted. Nothing was lost (git clean, all UI source intact); it was the old install
+plus the app's single-instance guard colliding across multiple builds. **Fix going forward:
+keep ONE app.** The owner should uninstall the Program Files copy (Settings → Apps); dev/test
+should not run while another build is running. Also: the dark-glass only appears in
+Settings → Appearance → **Glass** (it is an appearance mode, not the default), and a built exe
+only reflects source as of its build time — the confusion started because the running exe
+pre-dated the glass commit by an hour.
+
+The app currently in front of the owner is a **debug bundle** (`tauri build --debug`,
+`target/debug/aurascribe.exe`) — functional but slower than a release build; use `build.bat`
+for a real release/benchmark.
 
 ### Round 14 (2026-08-06) — Moonshine engine built (feature-gated); dark-glass; history cleaned
 
