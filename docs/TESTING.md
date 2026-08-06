@@ -101,8 +101,8 @@ the window by hand is never something you should have to do.
 
 1. Launch the app. The settings window **opens by itself** when no model is installed.
 2. Go to **Settings → Whisper Model**.
-3. Click **Download & Use** on `large-v3-turbo-q5_0` (~574 MB, recommended). Pick
-   `base.en` (~142 MB) instead if you'd rather not wait on the download.
+3. Click **Download & Use** on `base.en` (~142 MB, recommended). Pick `tiny.en` (~75 MB) for
+   a weaker machine, or `base` if you dictate in a language other than English.
    - It downloads once, then loads automatically. A progress bar shows during download.
    - After this, it works offline forever — free, no account.
 4. Go back to **Home**. It should say **Ready**.
@@ -131,15 +131,12 @@ installing a dictionary — a one-time cost, after which nothing leaves your mac
 
 | Model | Size | Notes |
 |---|---|---|
-| `tiny.en` | ~75 MB | Fastest, noticeably less accurate |
-| `base.en` | ~142 MB | Good balance if you want a small download |
-| `large-v3-turbo-q5_0` | ~574 MB | **Recommended** — near-`large-v3` accuracy at a fraction of the runtime |
-| `large-v3-turbo` | ~1.6 GB | Same, unquantised |
-| `large-v3` | ~3.1 GB | Most accurate, slowest |
+| `tiny.en` | ~75 MB | Fastest, English, for weak machines |
+| `base.en` | ~142 MB | **Recommended** — English, best balance |
+| `base` | ~142 MB | Multilingual — same speed, for other languages |
 
-`small.en` and `medium` were deliberately removed in Round 3: `large-v3-turbo-q5_0` is
-smaller, faster *and* more accurate than `small.en`, so keeping them would only offer a
-strictly worse choice.
+The `large-v3` family was removed in Round 10: on a CPU it ran many times slower than real
+time and overheated the machine. It can return behind a GPU build.
 
 ## 2. Finding the app
 

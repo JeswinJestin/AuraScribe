@@ -4,9 +4,335 @@
 > starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-05
-**Status:** Working end-to-end on Windows. Ships a ~4.6 MB installer.
+**Last updated:** 2026-08-06
+**Status:** Working end-to-end on Windows (~4.6 MB installer). Warm-glass redesign shipped;
+Whisper-only today. **Next major work: a Moonshine ASR engine for CPU speed — see Round 13.**
 **Owner:** Jeswin Thomas Jestin
+
+### Round 13 (2026-08-06) — Glass appearance corrected; the speed-engine plan (READ BEFORE NEXT BUILD)
+
+**This round is mostly a plan.** The owner is continuing in a new chat to build the speed
+engine. The next section is the brief for that work.
+
+**Glass appearance, corrected.** It was wrong before — a shrunken box on a glow. Now it is
+**full size like every other mode**; what changes is the *material*: a bluish backdrop fills
+the whole window, the shell is a frosted veil, and every card is frosted glass (dark text
+stays readable because the frost lightens the blue). Implemented entirely in the `.glass-bg`
+scope of `globals.css`; the shell is always full-bleed in `page.tsx`. Selectable at
+Settings → Appearance → **Glass** (4th option).
+
+**`public/` folder created.** It did not exist (that is why the owner couldn't find it). Drop
+a wide, calm, bluish image at `public/glass-bg.jpg` and it becomes the Glass backdrop
+automatically (referenced as `/glass-bg.jpg`; CSS falls back to a blue gradient until then).
+CSP already allows `img-src 'self'`, so a local image is fine. See `public/README.md`.
+
+#### The speed engine — research answers + implementation brief
+
+The owner's three questions, answered:
+
+**1. Is Moonshine public or someone's private thing?**
+Fully open source, **MIT license**, built by Useful Sensors (now "Moonshine AI"), on GitHub +
+HuggingFace. Anyone can use the models and code freely. Handy uses this exact public model —
+nothing stops us doing the same.
+
+**2. Is anything faster than Moonshine for us?**
+For **our exact case — Windows CPU, short English dictation — Moonshine is the fastest
+practical option.** It is purpose-built for CPU/edge, its compute scales with clip length
+(perfect for dictation, and it *helps* our chunking), ~5× faster than Whisper, WER better than
+`tiny.en`/`base.en`. **Parakeet** posts huge throughput numbers (100–2000× RTFx) but those are
+on **GPU / Apple Neural Engine**, not CPU; it is 600M params and heavier. Parakeet's real win
+is *multilingual* + accelerator throughput. **SenseVoice Small** is a fast multilingual
+alternative. Conclusion: **Moonshine for English speed; Parakeet/SenseVoice for multilingual.**
+
+**3. If we use the same public model as competitors, how do we stand out? Should we build our own?**
+Be clear-eyed here: **the models are commodities.** Whisper, Moonshine, Parakeet are all open,
+and *every* competitor (Handy, VoiceInk, Spokenly, open-wispr) uses these same public models —
+**none of them trained their own.** Training a competitive ASR model costs millions in
+compute + data and would violate the free/lightweight promise; it is the one move that would
+sink this project. **Differentiation is the product layer, not the model:** latency-hiding
+(chunking + silence trim), the local cleanup pipeline (punctuation, question marks, fillers,
+dictionary/snippets), injection reliability, the design, and being genuinely free + local +
+open. That is where we already build and where we win. Use the best public model like
+everyone else, and beat them on everything around it.
+
+##### Implementation brief for the next chat
+
+**Vehicle: the `sherpa-onnx` Rust crate** (k2-fsa). It runs Moonshine, Parakeet, SenseVoice,
+Whisper **and Silero VAD** on **Windows x86_64 CPU** via ONNX Runtime, offline. Its build
+script auto-downloads a prebuilt lib (no CMake/whisper-style native pain). crates.io:
+`sherpa-onnx`; source: github.com/k2-fsa/sherpa-onnx.
+
+Suggested steps, in order:
+
+1. **Add `sherpa-onnx` as an optional engine behind a Cargo feature** (like `whisper`), so the
+   existing Whisper path stays intact and shippable while the new one is built.
+2. **Introduce an `Engine` abstraction** in `asr.rs`: a trait with `transcribe(&[f32], lang)`,
+   implemented by the existing `WhisperASR` and a new `MoonshineASR` (sherpa-onnx). The
+   command layer (`commands.rs::transcribe_chunk`) already calls one `asr.transcribe(...)` —
+   keep that surface.
+3. **Extend the model list** (`MODELS` in `asr.rs`) with an engine tag. Add Moonshine tiny/base
+   (English) and one multilingual (Parakeet or SenseVoice). Download URLs are HuggingFace ONNX
+   archives, not the ggml `.bin` path — the download logic needs a per-engine URL/format.
+4. **Recover Silero VAD** (deleted in the rebuild; in git history as `vad.rs`). sherpa-onnx
+   ships VAD, so prefer its built-in. Use it to auto-trim silence and (optionally) auto-stop on
+   end of speech — less audio in, snappier feel, on every engine.
+5. **Re-run the benchmark** (`tests/transcription.rs`, on an **idle** CPU — see Round 8) to get
+   real Moonshine-vs-Whisper numbers on this machine, and update the model `cpu_cost` table +
+   recommendation logic from measurement, not estimates.
+6. Keep Whisper as the accuracy option; make **Moonshine `base` the default recommendation** on
+   CPU once measured.
+
+**Do not** attempt to train or build a bespoke ASR model. Integrate the best open one and win
+on the product.
+
+##### GPU acceleration for Parakeet — the correct mental model
+
+The owner asked about integrating Parakeet "which enables their GPU", downloaded in the
+background at install. One misconception to clear up first: **a model file does not enable a
+GPU. The runtime does.** Parakeet is just weights; whether it runs on GPU depends on which
+ONNX Runtime *execution provider* the app is built with.
+
+- **Parakeet runs on CPU too** — it is not GPU-only, just faster with acceleration. So it can
+  ship as a universal multilingual option even for GPU-less machines.
+- **On Windows, use the DirectML execution provider**, not CUDA. DirectML works on *any*
+  GPU (NVIDIA / AMD / Intel integrated) with no CUDA/toolkit install — the same "one build
+  serves everyone" property we wanted from Vulkan, but for ONNX. `sherpa-onnx` exposes the
+  provider choice.
+- **Right architecture:** Moonshine (CPU, fast, default, works everywhere) + Parakeet as an
+  opt-in multilingual/accurate engine that (a) downloads its ONNX model on demand and (b)
+  uses DirectML when a GPU is present, silently falling back to CPU when not. Detect the GPU
+  at runtime; never *require* one. This keeps the "works on every device" promise while
+  giving GPU owners a speed/accuracy bump.
+
+This is a follow-up to the Moonshine integration, not a prerequisite. Sequence: Moonshine
+first (the universal CPU win), then Parakeet + DirectML as the GPU-accelerated tier.
+
+### Round 12 (2026-08-06) — full-bleed shell, disk cleanup, competitor speed analysis
+
+- **Redesign is full-bleed now.** The owner found the 28px "box on a glow" inset too boxed-in.
+  The app fills the frameless window edge to edge; the floating-on-glow look became an opt-in
+  **"Glass" appearance** (Settings → Appearance, a 4th option beside Light/Dark/System). Glass
+  applies a `.glass-bg` glow to the backdrop and re-insets the panel; a background image
+  dropped into `public/` later can replace the CSS gradient (the owner will supply images).
+- **Reclaimed 20 GB.** `src-tauri/target/debug` (20 GB, only used by `dev.bat`) plus `.next`
+  and `out` were deleted — all rebuildable caches. `target/release` (4.8 GB) is kept so
+  `build.bat` stays fast. First `dev.bat` after this recompiles whisper.cpp once.
+
+#### Competitor analysis — how they beat us on CPU speed, and the fix
+
+The owner asked why the app is CPU-heavy/slow versus Handy, VoiceInk, Spokenly, open-wispr,
+etc. The answer is concrete and actionable:
+
+**We only ship Whisper, which is the *slowest* CPU option.** Handy (17–20k stars, and built
+on the exact same Tauri + Rust + React stack we use) offers three engines:
+
+| Engine | CPU speed | Notes |
+|---|---|---|
+| **Moonshine V2** | **~5× faster than Whisper** | English, 31–192 MB, WER *better* than `tiny.en`/`base.en`. Compute scales with audio length, not Whisper's fixed 30 s window. |
+| **Parakeet V3** (NVIDIA) | ~5× real time, CPU-only | multilingual, auto language detect |
+| Whisper | slowest on CPU | what we have today |
+
+**Moonshine is the headline fix for the owner's exact complaint.** It runs via ONNX Runtime
+(Rust: the `ort` crate) on CPU, is smaller than `base.en`, *more* accurate on English, and
+—crucially— its compute scales with clip length, so it synergises with our chunking + silence
+trimming instead of fighting them (Whisper's 30 s window is what made chunking wasteful for
+slow models). A Moonshine engine + our existing chunking/trim would make CPU dictation feel
+near-instant without a GPU.
+
+**Recommended roadmap to compete (in order):**
+1. **Add Moonshine (ONNX via `ort`) as a second engine**, selectable per the model list. This
+   is the single biggest speed win and directly answers "too CPU-heavy". Large but well-trodden
+   — Handy did exactly this in our stack.
+2. **Recover Silero VAD** (was deleted as dead code in the rebuild; recover from git). Auto-trim
+   silence and auto-stop on end-of-speech — less audio to process, snappier feel.
+3. **Parakeet V3** as the multilingual fast engine, replacing the removed large models for
+   non-English.
+4. GPU (Vulkan) stays parked as the accuracy-at-speed option for machines that have one.
+
+Sources: Handy (github.com/cjpais/Handy), Moonshine (github.com/moonshine-ai/moonshine).
+
+**Not yet started** — all of the above is analysis + roadmap; no ASR-engine code was written
+this round. The owner should decide whether to invest in the Moonshine backend next.
+
+### Round 11 (2026-08-06) — "warm glass" visual redesign
+
+Implemented the owner's redesign from a Claude Design project (`AuraScribe App Redesign.dc.html`,
+pulled via the DesignSync tool). A full change of visual direction, from the austere
+"instrument" to a warm, premium consumer surface — while keeping every screen wired to the
+real IPC and honouring the product principles.
+
+- **Look:** a cream glassmorphic panel floating on a deep indigo glow (pure CSS gradient, no
+  image asset). Newsreader serif for display, IBM Plex Sans for UI, IBM Plex Mono for machine
+  values. Indigo `#4C6FFF` accent replacing cyan; warm red for recording.
+- **Frameless window** (`decorations:false`) with a custom titlebar: sidebar-collapse left,
+  min/maximize/close right (wired via `@tauri-apps/api/window`), drag via
+  `data-tauri-drag-region`. Added the four `core:window:*` permissions to capabilities.
+- **New per-tab right widget rail** (`WidgetRail.tsx`) — contextual cards. Deliberately no
+  fabricated usage numbers; anything numeric is real state or omitted.
+- Restyled tokens (`globals.css`), shell (`page.tsx`), sidebar, shared components (`ui.tsx`),
+  every view, and the signal meter.
+
+**Two principled calls, both verified:**
+
+- **Fonts are self-hosted via `next/font`, not the design's Google-CDN `<link>`.** That link
+  would be a runtime cloud request — breaking local-first *and* the CSP. next/font downloads
+  at build time and serves from origin. Verified: 22 woff2 embedded, zero runtime CDN
+  references in the output HTML.
+- **The glow is a CSS gradient, not `bg-glow.jpg`** — lighter, scalable, no CSP/asset issues.
+
+Verified rendering in the browser preview (computed glass panel 1304×785 fills the window)
+and in the real frameless build (window opens 1573×994, controls present). Default theme
+changed to `light` so fresh installs get the cream look; existing installs keep their saved
+theme (switch Appearance → Light to see the cream design).
+
+**Open / unverified by a human:** borderless-window edge-resize and snap behaviour on Windows
+(should work with `resizable:true`); the cream light theme in the *real* app (confirmed in
+browser preview + the dark variant in the real app).
+
+### Round 10 (2026-08-06) — model list trimmed to CPU-viable; product-overview PDF
+
+- **Removed the `large-v3` family** (`large-v3`, `large-v3-turbo`, `large-v3-turbo-q5_0`). On a
+  CPU they ran at 2.5×–15× the length of the speech and overheated the machine; a CPU-first
+  free product should not list a model that needs a GPU to be usable. The list is now
+  `tiny.en`, `base.en`, and `base` (multilingual) — all faster than real time on CPU, so
+  dictating in other languages survives without the heavy models. They can be reinstated
+  behind a `gpu_enabled()` check once `build-vulkan.bat` succeeds. README/TESTING tables
+  updated to match.
+- **`docs/AuraScribe-Product-Overview.pdf`** — an 8-page as-built reference for the redesign
+  team: every tab, the navigation, layout, interaction states, the current visual system
+  (documented honestly, including its deliberate austerity), the accessibility floor that must
+  survive any redesign, the technical shape, and a free-vs-fixed table. Regenerate with
+  `scratchpad/gen_overview.py` (ReportLab). The owner wants a warmer, more premium redesign
+  (gradients, curves, better type) — legitimate, and not in tension with any product principle.
+
+### Round 9 (2026-08-05) — sounds, sidebar, question marks; GPU parked
+
+Three requested UX fixes, plus an honest stop on GPU.
+
+- **Audible start/stop cue (`sound.rs`).** Soft two-note sine chirps — rising on start, falling
+  on stop — synthesised with `cpal` (already a dependency, no new weight) rather than the
+  harsh Win32 beep the owner said not to use. Plays from the *backend*, because the hotkey
+  fires when no window is open, so a frontend sound would not play. The start cue is emitted
+  *before* the mic stream opens so it is never captured into the recording. Toggle in
+  Settings → Application (migration `005_sound_cues.sql`, default on).
+- **Sidebar collapse jitter fixed.** Every row now centres its icon in a fixed 44px slot in
+  both states, so collapsing only changes panel width and hides labels — the icons no longer
+  slide sideways. The previous version swapped each row between left-padded and
+  `justify-center`, which moved the icon's x-position during the width transition.
+- **Question marks (`cleanup::fix_question_marks`).** Whisper's small models often emit no
+  terminal punctuation, so cleanup was forcing `.` even on questions. It now upgrades a
+  sentence's `.`→`?` when the sentence reads as a question: WH-word initial (who/what/why/…,
+  excluding "how to"), or an auxiliary + a nearby subject pronoun ("is **this** working") so
+  imperatives ("do the dishes") keep their period. High-precision by design — a wrong `?`
+  reads worse than a missed one. It cannot split a run-on Whisper never punctuated, and makes
+  no attempt at `!` (that needs reading intent, which is an LLM's job, which is banned).
+
+**GPU parked, deliberately.** Five distinct Windows/CMake/Ninja build failures against
+whisper-rs 0.16 / whisper-rs-sys 0.15's Vulkan backend; four were fixed (VULKAN_SDK not
+inherited → passed explicitly; MSBuild can't build vulkan-shaders-gen → Ninja; CMake 4.4 too
+new → VS-bundled CMake 3.31; compiler ABI probe → same). The fifth is an upstream
+shader-generator/Ninja path bug in the pinned whisper. `build-vulkan.bat` captures all four
+fixes for a one-command retry after a whisper dependency bump. The Vulkan SDK the owner
+installed is not wasted. Decision: ship the fast CPU path (`base.en` + silence trimming);
+GPU is a want, not the product. **`build-vulkan.bat` and the `vulkan`/`cuda`/`metal` cargo
+features stay in the tree as the on-ramp.**
+
+### Round 8 (2026-08-05) — chunking that respects physics, plus silence trimming
+
+Round 7's chunking helped `base.en` but made `large-v3-turbo` and `large-v3` **worse** — the
+owner watched turbo process for 13+ minutes. Two causes, both now fixed:
+
+1. **Chunking cannot help a model slower than real time.** While you speak for 60s, turbo
+   (~2.5–4×) needs 150–240s; it falls behind every second and the backlog is paid back after
+   you stop. Splitting never drains it.
+2. **Chunking made slow models *slower*.** whisper.cpp processes fixed 30-second windows, so
+   twelve 15s chunks cost twelve windows where one pass costs ~six — roughly double the
+   compute on `large-v3`.
+
+**Fix:** live chunking is now gated on `asr::should_chunk(model)` — only models that keep up
+(`realtime_factor ≤ 0.8`, i.e. `base.en`/`tiny.en` on CPU, everything with a GPU) are split
+during recording. Slower models transcribe once at stop: still slow, but no longer *made*
+slow by the extra windows. `MAX_CHUNK_SECS` dropped 24→15 and `MIN` 8→6 to shorten the final
+chunk's wait for the models that do chunk.
+
+**Silence trimming (`chunking::trim_silence`).** Whisper is charged for silence exactly like
+speech, so leading/trailing gaps and long internal pauses (>600ms) are stripped before
+transcription — collapsed to a 150ms pause so sentence rhythm survives. A universal win: less
+audio in, less compute, less heat, on every model and every machine. Natural sub-600ms pauses
+are preserved so accuracy is untouched. 4 unit tests.
+
+**Warnings hardened.** Red threshold moved 5×→2×: `turbo-q5_0` at 2.5× (a 75-second wait for
+30 seconds of speech) now shows red, not amber, and the text states that live processing is
+off for models that slow and gives the concrete minute cost *before* download.
+
+**The honest limit, stated plainly:** on a CPU, `large-v3` is a 15× operation. No algorithm
+removes that — only a smaller model or a GPU does. "Works on every device" means the fast
+models work everywhere; the large ones need a GPU. This is now what the UI communicates.
+
+### Round 7 (2026-08-05) — chunked transcription, and speed measured honestly
+
+**The speed complaint was two separate problems, and only one was about optimisation.**
+
+The owner reported 5-8 minute waits and a laptop hot enough to smell. Their own transcript
+history settled it:
+
+| model | processing / speech length | source |
+|---|---|---|
+| `base.en` | 0.36x - 0.62x | 7 real dictations |
+| `large-v3` | 8.8x, 16.6x, **27.2x** | 3 real dictations |
+
+17 seconds of speech took **471 seconds** on `large-v3`. That is not a tuning problem; the
+UI offered a 3.1 GB model with a 5/5 accuracy badge and no warning that it was unusable on a
+CPU. The user picked the most accurate option, which is the reasonable thing to do.
+
+**Fixes:**
+
+- **Recommendations are computed for the machine**, not static — the most accurate model
+  that still runs faster than speech. On CPU that is `base.en`. (`large-v3-turbo-q5_0` was
+  wrongly marked "recommended" in Round 5c; at ~2.5x it is slower than speaking.)
+- **Warnings shown before download**, carrying the real multiplier.
+- **Threads cut from logical to physical cores** (16 -> 8 here). Inference is SIMD-bound, so
+  SMT siblings contend for the same vector units: more heat, no more throughput.
+- **Builds capped at 6 of 16 jobs** in `dev.bat`/`build.bat`. A thermally limited laptop
+  throttles anyway, so the wall-clock cost is small and the machine stays far cooler.
+
+**Chunked transcription (`chunking.rs`).** Audio is transcribed while the user is still
+speaking, so the remaining wait is one chunk rather than the whole recording. Cuts are placed
+in silence — splitting a word gives Whisper half of it on each side and it mis-transcribes
+both. Minimum 8s, ceiling 24s, silence gap >= 250ms, latest qualifying gap preferred for
+maximum context. Expected effect on a 30s dictation: ~15s wait becomes ~1-2s.
+
+This is the *universal* answer, which is why it outranked GPU work. Chunking does not make
+transcription faster; it removes the waiting, and it does so on any hardware. GPU offload
+only helps machines that have a GPU.
+
+**The audio-buffer lock is the hazard to respect.** The cpal callback takes it with
+`try_lock` and silently discards samples on failure, so holding it across a transcription
+would punch holes in the recording. The chunker drains into a local buffer and releases
+before doing any work.
+
+**Benchmarking lesson: this project must be benchmarked on an idle CPU.** Measured right
+after a full rebuild, disabling temperature fallback looked like a 12% win. On an idle
+machine it is consistently *slower* (~31s vs ~26s, three runs each). One contaminated run
+came in at 190s against a true ~26s. Both that change and an AVX2 `CFLAGS` experiment (76s
+vs 42s — `/O2` was filtered out while `/arch:AVX2` landed) were reverted.
+
+**Injection now falls back both ways.** Paste is primary for long text, but the owner's
+clipboard wedged system-wide mid-session — PowerShell's own `Set-Clipboard` failed too — and
+a wedged clipboard would have made dictation silently fail. Paste falls back to typing and
+typing to paste, plus retry-with-backoff on `OpenClipboard` for ordinary contention from
+clipboard managers.
+
+**Wire-format bug fixed (Round 6 carryover).** Rust serialised `Status`/`Settings` as
+camelCase while `src/lib/ipc.ts` and every component read snake_case, so `is_model_loaded`
+was permanently `undefined`. The Dictate screen showed "Add a voice model to begin" no matter
+what was loaded — **no reinstall could have fixed it** — the sidebar never showed recording
+state, and `save_settings` could not deserialise what the UI sent. One mismatch, four broken
+features, no error anywhere. `invoke()` returns an unchecked shape, so TypeScript asserted
+the type rather than verifying it; two tests now assert the wire field names.
+
+**Still open:** runtime per-machine calibration (the cost table is anchored on one Ryzen and
+would mis-recommend on a weak laptop), silence trimming, quantised low-end tier, Vulkan.
 
 ### Round 5 (2026-08-05) — the 404 overlay and the window size
 

@@ -2,9 +2,23 @@
 
 Free, open-source, local-first voice dictation. Press a hotkey, speak, and clean punctuated text appears at your cursor in any app — no account, no subscription, no cloud.
 
-![AuraScribe](https://img.shields.io/badge/version-1.0.0-blue)
+![AuraScribe](https://img.shields.io/badge/version-0.3.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+
+## ⬇️ Download (Windows)
+
+Most people should just grab the installer — no build tools, no cloning the repo.
+
+1. Go to the [**Releases**](https://github.com/JeswinJestin/AuraScribe/releases/latest) page.
+2. Download **`AuraScribe_x64-setup.exe`** (~4.6 MB).
+3. Run it. AuraScribe installs and opens.
+4. In **Settings → Voice model**, click **Download & Use** on `base.en` (recommended). It downloads once, then works offline forever.
+5. Click into any text field, press **Ctrl+Shift+Space**, speak, press again — your words appear at the cursor.
+
+That's it. The app lives in the system tray; close the window and it keeps running. Right-click the tray icon to quit.
+
+> **Windows only for now.** macOS and Linux are not yet supported — the code has honest stubs that return explicit errors rather than pretending to work. Contributions welcome.
 
 ## ✨ Features
 
@@ -26,7 +40,10 @@ This is the whole story, and it's checkable in the source:
 
 After the model is downloaded, dictation works fully offline — you can verify by turning off Wi-Fi.
 
-## 🚀 Quick Start
+## 🚀 Build from source
+
+Only needed if you want to modify the app — otherwise use the [Download](#️-download-windows)
+above.
 
 ### Prerequisites
 
@@ -111,18 +128,16 @@ aurascribe/
 Downloaded once, then used entirely offline. Stored under your local app data directory,
 in `AuraScribe/models/`.
 
-Sizes below are the actual download size.
+All three run faster than real time on a CPU, so dictation never leaves you waiting.
 
-| Model | Size | Language | Speed | Quality |
-|-------|------|----------|-------|---------|
-| `tiny.en` | ~75 MB | English | Fastest | Good |
-| `base.en` | ~142 MB | English | Fast | Better |
-| `large-v3-turbo-q5_0` | ~574 MB | Multilingual | Fast | Excellent — **recommended** |
-| `large-v3-turbo` | ~1.6 GB | Multilingual | Moderate | Excellent |
-| `large-v3` | ~3.1 GB | Multilingual | Slowest | Best |
+| Model | Size | Language | Speed (CPU) | Role |
+|-------|------|----------|-------------|------|
+| `tiny.en` | ~75 MB | English | fastest (~0.2×) | for weak machines |
+| `base.en` | ~142 MB | English | fast (~0.5×) | **recommended** |
+| `base` | ~142 MB | Multilingual | fast (~0.6×) | other languages |
 
-`small.en` and `medium` are deliberately not offered: `large-v3-turbo-q5_0` is smaller,
-faster *and* more accurate than `small.en`, so listing them would only offer a worse choice.
+The `large-v3` family was removed: on a CPU those models ran many times slower than real time
+and overheated the machine. They can return behind a GPU build (`build-vulkan.bat`).
 
 ## 🐛 Troubleshooting
 
