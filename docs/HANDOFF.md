@@ -11,6 +11,22 @@
 (startup crash, CRT mismatch — Round 14). Glass appearance is dark-vibrancy. **Owner:** Jeswin
 Thomas Jestin
 
+### Round 16 (2026-08-06) — Reverted heavy models; toggle + select theming fixed
+
+- **Reverted the Round-15 heavy models.** `small-q5_1` / `large-v3-turbo-q5_0` were far too
+  slow on CPU (the app even warned ~1 min for 30 s of speech). Removed. **Standing rule now
+  recorded in memory (`models-must-be-light-fast-accurate`): every model must be light + low
+  latency + accurate at once. Do not offer bigger Whisper models as an "upgrade." The path to
+  better accuracy is a fast engine (Moonshine), not a heavier model.**
+- **UI fixes (verified by screenshotting the running app).** The `Toggle` used `bg-foreground`
+  for the checked track — light in dark/glass (invisible white-on-white) and solid black in
+  light mode. Now indigo when on, subtle neutral when off: visible in every appearance. Native
+  `<select>` option popups defaulted to OS black; now themed to the popover tokens, navy in
+  glass. Verified: toggle renders indigo, model list shows only the light models.
+- Verification method worth reusing: `tauri build --debug --no-bundle` for a fast standalone
+  exe, then a PrintWindow (PW_RENDERFULLCONTENT=2) capture of the app window to see the real
+  render. Only ONE app instance may run (single-instance guard) — stop others first.
+
 ### Round 15 (2026-08-06) — Multilingual Whisper models added; version-confusion cleared
 
 Added `small-q5_1` (190 MB) and `large-v3-turbo-q5_0` (574 MB) to the Whisper catalogue —
