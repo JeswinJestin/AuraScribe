@@ -98,6 +98,25 @@ fn transcribes_known_audio() {
     params.set_no_context(true);
     params.set_language(Some("en"));
 
+    // Must mirror asr.rs::transcribe, or this benchmark measures something the app never
+    // runs. It previously left n_threads at whisper.cpp's default of 4 while the app used
+    // every core, so the numbers it produced were not the app's numbers.
+    let threads = std::env::var("AURASCRIBE_TEST_THREADS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
+        });
+    params.set_n_threads(threads as i32);
+
+    // Temperature fallback re-runs the decoder for a window when whisper.cpp decides the
+    // decode looked wrong. Off by default here so the two configurations are comparable.
+    let fallback = std::env::var("AURASCRIBE_TEST_FALLBACK").is_ok();
+    if !fallback {
+        params.set_temperature_inc(0.0);
+    }
+    println!("threads: {threads}, temperature fallback: {fallback}");
+
     state.full(params, &audio).expect("transcribe");
 
     let n = state.full_n_segments();

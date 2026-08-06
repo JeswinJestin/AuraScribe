@@ -5,6 +5,15 @@ use crate::asr::WhisperASR;
 use crate::commands::Status;
 use crate::db::Database;
 
+/// Transcripts of the pieces already processed while the user was still speaking, in
+/// order, plus enough information to report how long they actually spoke.
+#[derive(Default)]
+pub struct ChunkState {
+    pub texts: Vec<String>,
+    pub raw_samples: usize,
+    pub sample_rate: u32,
+}
+
 pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub status: Arc<Mutex<Status>>,
@@ -13,4 +22,9 @@ pub struct AppState {
     pub recording_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
     pub stop_flag: Arc<Mutex<bool>>,
     pub asr: Arc<WhisperASR>,
+    /// Results accumulated by the chunker during a recording.
+    pub chunk_state: Arc<Mutex<ChunkState>>,
+    /// The chunker itself. `stop_recording` awaits this; the task flushes the tail of the
+    /// recording before exiting, so awaiting it is what guarantees nothing is lost.
+    pub chunk_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
