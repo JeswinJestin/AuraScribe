@@ -11,6 +11,23 @@ is stable and loads a Moonshine model (verified, Round 17). Build it with `moons
 (release). Glass appearance is dark-vibrancy; toggles/selects/highlights themed. **Owner:**
 Jeswin Thomas Jestin
 
+### Round 18 (2026-08-06) — v0.4.0 release: Moonshine bundled into the installer
+
+Cut release **v0.4.0** (follows v0.3.0; version files aligned from an inconsistent 1.0.0 to
+0.4.0 across Cargo.toml, package.json, tauri.conf.json). The Moonshine engine now ships in the
+installer: a Moonshine-only config overlay (`src-tauri/tauri.moonshine.conf.json`) declares the
+sherpa-onnx + ONNX Runtime DLLs as bundle resources, wired into `moonshine-build.bat` via
+`--config` so the default Whisper installer is unaffected. Build with `moonshine-build.bat`.
+
+Verified: the build produces `AuraScribe_0.4.0_x64-setup.exe` (~8.7 MB, up from the 4.6 MB
+Whisper-only build because it bundles the ONNX Runtime), and the generated NSIS script
+(`target/release/nsis/x64/installer.nsi`) installs `onnxruntime.dll`,
+`onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `sherpa-onnx-cxx-api.dll` to
+`$INSTDIR` beside the exe — where the loader finds them. Release notes:
+`docs/RELEASE-NOTES-v0.4.0.md`. Tag `v0.4.0` created locally. **Publishing (git push + GitHub
+release) is done by the owner — the sandbox blocks network git here.** A real voice transcript
+and the installed-app run are still owner-verified steps.
+
 ### Round 17 (2026-08-06) — Moonshine RUNS on Windows (release); UI highlight fixes
 
 **Moonshine works on Windows in a release build — verified by running.** The Round-14
