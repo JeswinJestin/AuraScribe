@@ -4,12 +4,53 @@
 > starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-06
-**Status:** Working end-to-end on Windows (Whisper default). **Moonshine speed engine now RUNS
-on Windows in a RELEASE build** — the Round-14 crash is a debug-only heap assertion; release
-is stable and loads a Moonshine model (verified, Round 17). Build it with `moonshine-build.bat`
-(release). Glass appearance is dark-vibrancy; toggles/selects/highlights themed. **Owner:**
-Jeswin Thomas Jestin
+**Last updated:** 2026-08-06 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+
+**Status — v0.4.0 built and installed locally; GitHub publish is the only step left.**
+AuraScribe works end-to-end on Windows with two speech engines. Whisper is the default;
+**Moonshine (the fast engine) now runs on Windows and ships in the v0.4.0 installer.** The
+installer bundles the sherpa-onnx + ONNX Runtime DLLs and was verified by actually installing
+it: the app at `C:\Program Files\AuraScribe` is the new UI with `moonshine-base-en` Active, no
+crash. Appearance is dark-vibrancy glass; toggles/selects/highlights are themed.
+
+**Current state at a glance**
+
+- **Engines:** Whisper (whisper.cpp; default; multilingual; light models only) + Moonshine
+  (sherpa-onnx / ONNX Runtime; English; ~0.1× real time). The `engine.rs` facade routes each
+  request to the right engine by the selected model's `EngineKind`.
+- **Verified by running:** the INSTALLED v0.4.0 app launches the new UI and loads Moonshine with
+  no crash. Whisper dictation works.
+- **NOT yet verified (needs the owner):** a real Moonshine *voice transcript* and its on-CPU
+  speed number.
+- **Builds:** default Whisper installer = `build.bat`; Moonshine build + installer =
+  `moonshine-build.bat` (release). **Moonshine only runs in a RELEASE build** — a debug build
+  trips a harmless CRT debug-heap assertion (see Round 17).
+- **To publish v0.4.0** (owner runs; sandbox blocks network git here):
+  `git push origin master` · `git push origin v0.4.0` ·
+  `gh release create v0.4.0 --title "AuraScribe v0.4.0 — the Moonshine speed engine" --notes-file docs/RELEASE-NOTES-v0.4.0.md src-tauri/target/release/bundle/nsis/AuraScribe_0.4.0_x64-setup.exe`
+- **Next feature:** fast **multilingual** via SenseVoice on the existing sherpa-onnx engine.
+- **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
+  rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
+  `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### Round 19 (2026-08-06) — ROOT CAUSE of the recurring "old UI" (process fix)
+
+The owner repeatedly saw the OLD UI after changes. **It was never a UI code bug.** Root cause:
+an old copy installed at `C:\Program Files\AuraScribe` is what Windows launches when the owner
+opens AuraScribe normally (shortcut/taskbar/Start). Fresh builds were being launched *directly*
+from `target\debug` / `target\release` — a different exe — so the owner's shortcut kept opening
+the stale installed copy. The single-instance guard (`dev.aurascribe.app`) made whichever copy
+launched first win, compounding the confusion.
+
+**Permanent fix applied:** installed v0.4.0 elevated (`Start-Process setup.exe -ArgumentList /S
+-Verb RunAs`, owner accepts one UAC prompt), which OVERWRITES `C:\Program Files\AuraScribe` with
+the new build + bundled DLLs. Fixed the stale HKCU `Run\AuraScribe` autostart value (it pointed
+at `target\release`) to the installed exe. Verified: the INSTALLED Program Files app runs the new
+UI with `moonshine-base-en` Active, no crash — end-to-end proof the bundled installer works.
+
+**PROCESS RULE (do not repeat the mistake): to show the owner a change, rebuild the installer
+and reinstall (elevated, replacing Program Files) — never launch a loose `target\*` build. There
+must be exactly ONE AuraScribe installed.**
 
 ### Round 18 (2026-08-06) — v0.4.0 release: Moonshine bundled into the installer
 
@@ -25,8 +66,8 @@ Whisper-only build because it bundles the ONNX Runtime), and the generated NSIS 
 `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `sherpa-onnx-cxx-api.dll` to
 `$INSTDIR` beside the exe — where the loader finds them. Release notes:
 `docs/RELEASE-NOTES-v0.4.0.md`. Tag `v0.4.0` created locally. **Publishing (git push + GitHub
-release) is done by the owner — the sandbox blocks network git here.** A real voice transcript
-and the installed-app run are still owner-verified steps.
+release) is done by the owner — the sandbox blocks network git here.** (The installed-app run
+was verified in Round 19; a real voice transcript is still an owner step.)
 
 ### Round 17 (2026-08-06) — Moonshine RUNS on Windows (release); UI highlight fixes
 
@@ -1060,22 +1101,3 @@ would be over-engineering.
 - **Never show a window before its page confirms it loaded.** Always-on-top, undecorated
   windows turn any load failure into an error box the user cannot dismiss. The overlay's
   `overlay_ready` handshake is the pattern to copy.
-
-### Round 19 (2026-08-06) — ROOT CAUSE of the recurring "old UI" (process fix)
-
-The owner repeatedly saw the OLD UI after changes. **It was never a UI code bug.** Root cause:
-an old copy installed at `C:\Program Files\AuraScribe` is what Windows launches when the owner
-opens AuraScribe normally (shortcut/taskbar/Start). Fresh builds were being launched *directly*
-from `target\debug` / `target\release` — a different exe — so the owner's shortcut kept opening
-the stale installed copy. The single-instance guard (`dev.aurascribe.app`) made whichever copy
-launched first win, compounding the confusion.
-
-**Permanent fix applied:** installed v0.4.0 elevated (`Start-Process setup.exe -ArgumentList /S
--Verb RunAs`, owner accepts one UAC prompt), which OVERWRITES `C:\Program Files\AuraScribe` with
-the new build + bundled DLLs. Fixed the stale HKCU `Run\AuraScribe` autostart value (it pointed
-at `target\release`) to the installed exe. Verified: the INSTALLED Program Files app runs the new
-UI with `moonshine-base-en` Active, no crash — end-to-end proof the bundled installer works.
-
-**PROCESS RULE (do not repeat the mistake): to show the owner a change, rebuild the installer
-and reinstall (elevated, replacing Program Files) — never launch a loose `target\*` build. There
-must be exactly ONE AuraScribe installed.**
