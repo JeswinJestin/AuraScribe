@@ -45,9 +45,10 @@ the benchmark).
 **The open decision — installer size vs. shipping Moonshine.** `sherpa-onnx` links the ONNX
 Runtime into the binary at build time, adding well over 10 MB. Enabling `moonshine` in the
 default feature therefore breaks the ~4.6 MB "stay lightweight" non-negotiable. So it was
-**deliberately left opt-in.** Options for the owner: (a) accept a larger installer and ship
-Moonshine by default; (b) ship two installers (lite Whisper-only vs. full); (c) keep it a
-separate feature build. Not decided — do not flip `moonshine` into `default` without choosing.
+**deliberately left opt-in. Owner's decision (2026-08-06): keep it opt-in for now** — try it
+via `moonshine-dev.bat` and confirm a real transcript + benchmark first, then revisit shipping.
+Do not flip `moonshine` into `default` until that revisit. Later options remain: (a) ship
+Moonshine by default with a larger installer; (b) ship two installers (lite vs. full).
 
 **Still not done (deferred, not forgotten):**
 - Silero VAD recovery (sherpa ships it) for auto-trim / auto-stop — Round 13 step 4.
