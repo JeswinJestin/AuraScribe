@@ -5,9 +5,71 @@
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
 **Last updated:** 2026-08-06
-**Status:** Working end-to-end on Windows (~4.6 MB installer). Warm-glass redesign shipped;
-Whisper-only today. **Next major work: a Moonshine ASR engine for CPU speed — see Round 13.**
-**Owner:** Jeswin Thomas Jestin
+**Status:** Working end-to-end on Windows (~4.6 MB installer, Whisper-only default). The
+**Moonshine speed engine is built and integrated behind the `moonshine` feature** (compiles
+both ways); it is not in the default build yet — see Round 14 for why and the open decision.
+Glass appearance is now dark-vibrancy. **Owner:** Jeswin Thomas Jestin
+
+### Round 14 (2026-08-06) — Moonshine engine built (feature-gated); dark-glass; history cleaned
+
+Three things this round: the Moonshine engine from Round 13's plan is now actually built,
+the Glass appearance was reworked for the owner's dark backdrop image, and the git history
+was cleaned of the Claude co-author trailer.
+
+**Moonshine engine — built and integrated, behind the `moonshine` Cargo feature.** Whisper
+stays the v1 default engine, untouched; Moonshine is the new, faster, lower-latency option
+layered on top via `sherpa-rs 0.6.8` (ONNX Runtime via sherpa-onnx). Landed as small commits,
+each `cargo check`-verified:
+
+1. `EngineKind {Whisper, Moonshine, Parakeet}` tagged onto every model + `ModelInfo`, mirrored
+   in `src/lib/ipc.ts`. Additive; behaviour unchanged.
+2. `sherpa-rs` optional dep + `moonshine` feature + feature-gated `moonshine.rs` (`MoonshineASR`).
+   `download-binaries` fetches a prebuilt, cached sherpa-onnx + onnxruntime — no CMake fight.
+3. Moonshine catalogue (`moonshine-tiny-en`, `moonshine-base-en`, int8 ONNX) + a downloader
+   that pulls the five model files flat from HuggingFace (`csukuangfj/sherpa-onnx-moonshine-*`),
+   no archive/unpack, reusing the existing reqwest streaming path.
+4. `engine::Asr` facade — one type over both engines, routing list/download/load/transcribe/
+   delete by `EngineKind`. `AppState.asr` is now `Arc<Asr>`. Compiles both with and without
+   the feature, warning-clean.
+
+Plus `moonshine-dev.bat` / `moonshine-build.bat` (mirror dev/build with `--features moonshine`).
+
+**What is verified:** the code compiles in both configurations (`cargo check` default and
+`--features moonshine`, both clean). The sherpa-onnx prebuilt libs download and link.
+**What is NOT verified — the project's own rule says say so:** no real Moonshine transcript
+or benchmark has been produced yet. That needs a human run: `moonshine-dev.bat`, download a
+Moonshine model in Settings, dictate, and confirm the transcript + timing. Do this before
+trusting the `cpu_cost`/accuracy estimates in `moonshine.rs` (they are placeholders pending
+the benchmark).
+
+**The open decision — installer size vs. shipping Moonshine.** `sherpa-onnx` links the ONNX
+Runtime into the binary at build time, adding well over 10 MB. Enabling `moonshine` in the
+default feature therefore breaks the ~4.6 MB "stay lightweight" non-negotiable. So it was
+**deliberately left opt-in.** Options for the owner: (a) accept a larger installer and ship
+Moonshine by default; (b) ship two installers (lite Whisper-only vs. full); (c) keep it a
+separate feature build. Not decided — do not flip `moonshine` into `default` without choosing.
+
+**Still not done (deferred, not forgotten):**
+- Silero VAD recovery (sherpa ships it) for auto-trim / auto-stop — Round 13 step 4.
+- Parakeet + DirectML multilingual/GPU tier — Round 13's follow-on.
+- A "New · Moonshine" badge in the Settings model list (the `engine` field is already on
+  `ModelInfo`; the UI just doesn't surface it yet).
+- `should_chunk` returns true for Moonshine via the facade, but Moonshine `cpu_cost` is an
+  estimate until benchmarked.
+
+**Dark-glass appearance.** The supplied `public/glass-bg.jpg` is a dark navy image; the old
+Glass used dark text on a frosted-white veil, which assumed a bright backdrop and was
+unreadable over it. Reworked the `.glass-bg` scope in `globals.css` to macOS-style dark
+vibrancy: glass now rides on the dark token set (light text), the shell is a smoked-glass
+veil, cards are darker frosted panes, with a gentle top-down darkening for contrast.
+`page.tsx` adds the `dark` class in Glass mode. Previewed against the real image.
+
+**Git history cleaned.** The owner did not want Claude listed as a GitHub contributor. All
+25 commits + the `v0.3.0` tag were rewritten to drop the `Co-Authored-By: Claude` trailer;
+the code tree is byte-identical to the pre-rewrite backup (`backup-pre-coauthor-rewrite`,
+local). **The force-push was blocked by the sandbox — the owner must run
+`git push --force origin master v0.3.0` themselves.** Going forward, commits in this repo
+omit the trailer (recorded in the memory file `no-claude-coauthor-trailer`).
 
 ### Round 13 (2026-08-06) — Glass appearance corrected; the speed-engine plan (READ BEFORE NEXT BUILD)
 
