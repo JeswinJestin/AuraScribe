@@ -41,10 +41,101 @@ pub fn clean(text: &str, options: CleanupOptions) -> String {
 
     if options.auto_punctuation {
         cleaned = normalize_punctuation(&cleaned);
+        cleaned = fix_question_marks(&cleaned);
         cleaned = capitalize_sentences(&cleaned);
     }
 
     collapse_whitespace(&cleaned)
+}
+
+/// Question words. Sentence-initial, these almost always signal a question in dictation.
+const WH_WORDS: &[&str] = &[
+    "who", "whom", "whose", "which", "what", "when", "where", "why", "how",
+];
+
+/// Auxiliaries that begin a yes/no question by inversion ("is this…", "did they…"). On their
+/// own these are ambiguous with imperatives ("do the dishes"), so a pronoun nearby is
+/// required before treating them as a question — see `looks_like_question`.
+const AUX_WORDS: &[&str] = &[
+    "is", "are", "am", "was", "were", "do", "does", "did", "can", "could", "will", "would",
+    "should", "shall", "have", "has", "had", "may", "might", "must",
+];
+
+/// A pronoun in the first few words is what separates an inverted question ("can YOU hear
+/// me") from an imperative that happens to start with an auxiliary ("do the dishes").
+const SUBJECT_PRONOUNS: &[&str] = &[
+    "you", "i", "we", "they", "he", "she", "it", "that", "this", "these", "those", "there",
+];
+
+/// Best-effort, deliberately high-precision question detection. Whisper's smaller models
+/// often emit no terminal punctuation, so cleanup has to guess `.` vs `?`; a wrong `?` reads
+/// worse than a missed one, so this only fires when it is fairly sure. It cannot split a
+/// run-on that Whisper never punctuated — that needs the larger models, which punctuate
+/// themselves — and it makes no attempt at `!`, which would require reading intent.
+fn looks_like_question(sentence: &str) -> bool {
+    let words: Vec<String> = sentence
+        .split_whitespace()
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let Some(first) = words.first() else {
+        return false;
+    };
+
+    // "how to reset the router" is a topic, not a question.
+    if first == "how" && words.get(1).map(|w| w == "to").unwrap_or(false) {
+        return false;
+    }
+
+    if WH_WORDS.contains(&first.as_str()) {
+        return true;
+    }
+
+    if AUX_WORDS.contains(&first.as_str()) {
+        return words
+            .iter()
+            .skip(1)
+            .take(3)
+            .any(|w| SUBJECT_PRONOUNS.contains(&w.as_str()));
+    }
+
+    false
+}
+
+/// Upgrade the terminal `.` of any sentence that reads as a question to `?`. Runs after
+/// `normalize_punctuation`, so every sentence already ends in a single mark.
+fn fix_question_marks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut sentence_start = 0;
+    let chars: Vec<char> = text.chars().collect();
+
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '.' || c == '?' || c == '!' {
+            let body: String = chars[sentence_start..i].iter().collect();
+            if c == '.' && looks_like_question(&body) {
+                out.push_str(&body);
+                out.push('?');
+            } else {
+                out.push_str(&body);
+                out.push(c);
+            }
+            sentence_start = i + 1;
+        }
+        i += 1;
+    }
+    // Any trailing text with no terminal mark (shouldn't happen after normalize, but be safe).
+    if sentence_start < chars.len() {
+        out.extend(&chars[sentence_start..]);
+    }
+    out
 }
 
 /// Removes `[...]` / `(...)` non-speech annotations that Whisper emits for silence, music
@@ -304,6 +395,40 @@ mod tests {
             CleanupOptions { remove_fillers: false, auto_punctuation: true },
         );
         assert!(out.to_lowercase().contains("um"));
+    }
+
+    #[test]
+    fn wh_questions_get_a_question_mark() {
+        let opts = CleanupOptions::default();
+        assert_eq!(clean("what time is the meeting", opts), "What time is the meeting?");
+        assert_eq!(clean("why did the build fail", opts), "Why did the build fail?");
+        assert_eq!(clean("how does this work", opts), "How does this work?");
+    }
+
+    #[test]
+    fn inverted_questions_with_a_subject_get_a_question_mark() {
+        let opts = CleanupOptions::default();
+        // "actually" is a filler and is stripped, so the expected text drops it too.
+        assert_eq!(clean("is this actually working", opts), "Is this working?");
+        assert_eq!(clean("can you hear me", opts), "Can you hear me?");
+        assert_eq!(clean("did they finish the report", opts), "Did they finish the report?");
+    }
+
+    #[test]
+    fn imperatives_and_statements_keep_their_period() {
+        let opts = CleanupOptions::default();
+        // Starts with an auxiliary but has no subject pronoun — an imperative, not a question.
+        assert_eq!(clean("do the dishes before you leave", opts), "Do the dishes before you leave.");
+        assert_eq!(clean("how to guides are everywhere", opts), "How to guides are everywhere.");
+        assert_eq!(clean("the deploy finished cleanly", opts), "The deploy finished cleanly.");
+    }
+
+    #[test]
+    fn question_mark_applies_per_sentence() {
+        let opts = CleanupOptions::default();
+        // A statement then a question, already split by Whisper's own punctuation.
+        let out = clean("the tests pass. what should we ship", opts);
+        assert_eq!(out, "The tests pass. What should we ship?");
     }
 
     /// Prints real before/after pairs so cleanup quality can be eyeballed:
