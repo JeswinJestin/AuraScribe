@@ -3,12 +3,14 @@
 mod app_state;
 mod asr;
 mod audio;
+mod chunking;
 mod cleanup;
 mod commands;
 mod db;
 mod hotkey;
 mod injection;
 mod overlay;
+mod sound;
 mod system;
 mod tray;
 
@@ -88,6 +90,8 @@ fn main() {
 
             let settings = tauri::async_runtime::block_on(async { db.load_settings().await })?;
 
+            sound::set_enabled(settings.sound_cues != 0);
+
             let mut initial_status = Status {
                 hotkey_mode: settings.hotkey_mode.clone(),
                 ai_cleanup_enabled: settings.ai_cleanup_enabled != 0,
@@ -121,6 +125,8 @@ fn main() {
                 recording_handle: Arc::new(Mutex::new(None)),
                 stop_flag: Arc::new(Mutex::new(false)),
                 asr,
+                chunk_state: Arc::new(Mutex::new(Default::default())),
+                chunk_task: Arc::new(Mutex::new(None)),
             };
             app.manage(state);
 

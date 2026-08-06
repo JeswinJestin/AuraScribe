@@ -8,20 +8,15 @@ use tauri::{command, AppHandle, Emitter};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub hotkey: String,
-    #[serde(rename = "hotkeyMode")]
     pub hotkey_mode: String,
-    #[serde(rename = "whisperModel")]
     pub whisper_model: String,
-    #[serde(rename = "micDevice")]
     pub mic_device: Option<String>,
-    #[serde(rename = "aiCleanupEnabled")]
     pub ai_cleanup_enabled: bool,
-    #[serde(rename = "removeFillers")]
     pub remove_fillers: bool,
     pub language: String,
     pub theme: String,
-    #[serde(rename = "startAtLogin")]
     pub start_at_login: bool,
+    pub sound_cues: bool,
 }
 
 impl Default for Settings {
@@ -34,31 +29,24 @@ impl Default for Settings {
             ai_cleanup_enabled: true,
             remove_fillers: true,
             language: "en".to_string(),
-            theme: "dark".to_string(),
+            theme: "light".to_string(),
             start_at_login: false,
+            sound_cues: true,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Status {
-    #[serde(rename = "isRecording")]
     pub is_recording: bool,
-    #[serde(rename = "isProcessing")]
     pub is_processing: bool,
-    #[serde(rename = "isModelLoaded")]
     pub is_model_loaded: bool,
     /// Which model is actually in memory right now. The frontend must trust this rather
     /// than the saved setting — the two diverge whenever a load fails or is in flight.
-    #[serde(rename = "loadedModel")]
     pub loaded_model: Option<String>,
-    #[serde(rename = "currentText")]
     pub current_text: String,
-    #[serde(rename = "lastError")]
     pub last_error: Option<String>,
-    #[serde(rename = "hotkeyMode")]
     pub hotkey_mode: String,
-    #[serde(rename = "aiCleanupEnabled")]
     pub ai_cleanup_enabled: bool,
 }
 
@@ -100,6 +88,7 @@ async fn load_settings_from_db(db: &Database) -> Result<Settings, String> {
         language: row.language,
         theme: row.theme,
         start_at_login: row.start_at_login != 0,
+        sound_cues: row.sound_cues != 0,
     })
 }
 
@@ -131,10 +120,13 @@ pub async fn save_settings(
             language: settings.language.clone(),
             theme: settings.theme.clone(),
             start_at_login: settings.start_at_login as i32,
+            sound_cues: settings.sound_cues as i32,
         })
         .await
         .map_err(|e| e.to_string())?;
     }
+
+    crate::sound::set_enabled(settings.sound_cues);
 
     if let Err(e) = crate::system::set_startup(settings.start_at_login) {
         tracing::warn!("Failed to update startup registration: {}", e);
@@ -156,6 +148,135 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<Status, Str
     Ok(status.clone())
 }
 
+/// Transcribes the recording in pieces while it is still being made.
+///
+/// Started by `start_recording`, awaited by `stop_recording`. On seeing the stop flag it
+/// transcribes whatever is left and exits, so awaiting it is what guarantees the tail of the
+/// recording is not dropped.
+///
+/// **The audio buffer lock is held for microseconds only.** The cpal capture callback takes
+/// it with `try_lock` and silently discards samples when it cannot — so holding it across a
+/// transcription (seconds) would punch holes in the user's recording. Samples are drained
+/// into a local buffer and the lock released before any work happens.
+#[allow(clippy::too_many_arguments)]
+async fn run_chunker(
+    app: AppHandle,
+    asr: std::sync::Arc<crate::asr::WhisperASR>,
+    audio_buffer: std::sync::Arc<tokio::sync::Mutex<Vec<f32>>>,
+    sample_rate: std::sync::Arc<tokio::sync::Mutex<u32>>,
+    stop_flag: std::sync::Arc<tokio::sync::Mutex<bool>>,
+    status: std::sync::Arc<tokio::sync::Mutex<Status>>,
+    chunk_state: std::sync::Arc<tokio::sync::Mutex<crate::app_state::ChunkState>>,
+    language: String,
+    // Only split during recording when the model can keep pace with speech. For a slower
+    // model, splitting cannot drain the backlog and each small chunk costs an extra
+    // whisper 30-second window, so the whole recording is transcribed once at stop instead.
+    live_chunking: bool,
+) {
+    // Pending audio stays at the device's rate; resampling happens once per chunk on a
+    // contiguous block, rather than repeatedly across arbitrary boundaries.
+    let mut pending: Vec<f32> = Vec::new();
+    let mut rate: u32 = 16000;
+
+    loop {
+        let drained: Vec<f32> = {
+            let mut buf = audio_buffer.lock().await;
+            std::mem::take(&mut *buf)
+        };
+        if !drained.is_empty() {
+            rate = *sample_rate.lock().await;
+            pending.extend_from_slice(&drained);
+            let mut cs = chunk_state.lock().await;
+            cs.raw_samples += drained.len();
+            cs.sample_rate = rate;
+        }
+
+        let stopping = *stop_flag.lock().await;
+
+        // Cut and transcribe every complete piece available right now — but only if live
+        // chunking helps this model. Otherwise everything falls through to the single
+        // transcription at stop below.
+        while live_chunking {
+            let Some(idx) = crate::chunking::find_split_point(&pending, rate) else {
+                break;
+            };
+            let chunk: Vec<f32> = pending.drain(..idx).collect();
+            transcribe_chunk(&app, &asr, &status, &chunk_state, chunk, rate, &language).await;
+        }
+
+        if stopping {
+            if !pending.is_empty() {
+                let tail = std::mem::take(&mut pending);
+                transcribe_chunk(&app, &asr, &status, &chunk_state, tail, rate, &language).await;
+            }
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// Transcribe one piece and append it to the running transcript.
+async fn transcribe_chunk(
+    app: &AppHandle,
+    asr: &std::sync::Arc<crate::asr::WhisperASR>,
+    status: &std::sync::Arc<tokio::sync::Mutex<Status>>,
+    chunk_state: &std::sync::Arc<tokio::sync::Mutex<crate::app_state::ChunkState>>,
+    chunk: Vec<f32>,
+    rate: u32,
+    language: &str,
+) {
+    let resampled = crate::audio::resample_linear(&chunk, rate, 16000);
+    if resampled.is_empty() {
+        return;
+    }
+
+    // Strip dead air before Whisper sees it. Whisper is charged for silence exactly like
+    // speech, so cutting the pauses and the gaps at each end is a real speed win on every
+    // model and every machine, at no accuracy cost.
+    let trimmed = crate::chunking::trim_silence(&resampled, 16000);
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let asr = asr.clone();
+    let lang = language.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let l = if lang == "auto" { None } else { Some(lang.as_str()) };
+        asr.transcribe(&trimmed, l)
+    })
+    .await;
+
+    let text = match result {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            tracing::warn!("Chunk transcription failed: {}", e);
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("Chunk transcription task panicked: {}", e);
+            return;
+        }
+    };
+
+    if text.trim().is_empty() {
+        return;
+    }
+
+    let running = {
+        let mut cs = chunk_state.lock().await;
+        cs.texts.push(text);
+        cs.texts.join(" ")
+    };
+    tracing::debug!(chars = running.len(), "Chunk transcribed");
+
+    // Show the transcript building up while the user is still talking. Without this the
+    // work is invisible and the app looks idle right up until the text lands.
+    let mut st = status.lock().await;
+    st.current_text = running;
+    emit_status(app, &st).await;
+}
+
 #[command]
 pub async fn start_recording(
     state: tauri::State<'_, AppState>,
@@ -167,6 +288,11 @@ pub async fn start_recording(
             return Err("No Whisper model loaded. Load one in Settings first.".to_string());
         }
     }
+
+    // Cue plays before the mic stream opens below, so the tone is never captured into the
+    // recording. This is also the fastest possible acknowledgement of the hotkey — it fires
+    // even when no window is open.
+    crate::sound::play_start();
 
     {
         let mut status = state.status.lock().await;
@@ -183,6 +309,10 @@ pub async fn start_recording(
     {
         let mut stop = state.stop_flag.lock().await;
         *stop = false;
+    }
+    {
+        let mut cs = state.chunk_state.lock().await;
+        *cs = Default::default();
     }
 
     let mic_device = {
@@ -275,6 +405,44 @@ pub async fn start_recording(
         *h = Some(handle);
     }
 
+    // Transcribe while the user speaks, so the wait after they stop is one chunk rather
+    // than the whole recording. Works on any hardware - unlike GPU offload, which only
+    // helps machines that have one.
+    let language = {
+        let db = state.db.lock().await;
+        load_settings_from_db(&db)
+            .await
+            .map(|s| s.language)
+            .unwrap_or_else(|_| "en".to_string())
+    };
+    // Live chunking only pays off when the model keeps up with speech. Decide from the model
+    // actually loaded, so a slow model transcribes once at stop rather than fighting a
+    // backlog it can never win — and without paying the extra-window penalty of many chunks.
+    let live_chunking = {
+        let status = state.status.lock().await;
+        status
+            .loaded_model
+            .as_deref()
+            .map(crate::asr::should_chunk)
+            .unwrap_or(false)
+    };
+    tracing::info!(live_chunking, "Recording started");
+    let task = tokio::spawn(run_chunker(
+        app.clone(),
+        state.asr.clone(),
+        state.audio_buffer.clone(),
+        state.audio_sample_rate.clone(),
+        state.stop_flag.clone(),
+        state.status.clone(),
+        state.chunk_state.clone(),
+        language,
+        live_chunking,
+    ));
+    {
+        let mut t = state.chunk_task.lock().await;
+        *t = Some(task);
+    }
+
     Ok(())
 }
 
@@ -283,6 +451,8 @@ pub async fn stop_recording(
     state: tauri::State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    crate::sound::play_stop();
+
     {
         let mut status = state.status.lock().await;
         status.is_recording = false;
@@ -299,12 +469,36 @@ pub async fn stop_recording(
         let _ = handle.join();
     }
 
-    let audio_buffer: Vec<f32> = {
-        let mut buf = state.audio_buffer.lock().await;
-        std::mem::take(&mut *buf)
+    // Most of the recording was transcribed while it was being made. Awaiting the chunker
+    // is what flushes the tail - it sees the stop flag, transcribes whatever is left, and
+    // exits. This await is therefore the only remaining wait the user experiences, and it
+    // is bounded by one chunk rather than by the length of the recording.
+    let wait_started = std::time::Instant::now();
+    if let Some(task) = state.chunk_task.lock().await.take() {
+        if let Err(e) = task.await {
+            tracing::warn!("Chunker task failed: {}", e);
+        }
+    }
+
+    let (raw_text, audio_ms) = {
+        let mut cs = state.chunk_state.lock().await;
+        let text = std::mem::take(&mut cs.texts).join(" ");
+        let ms = if cs.sample_rate > 0 {
+            (cs.raw_samples as f64 * 1000.0 / cs.sample_rate as f64).round() as i64
+        } else {
+            0
+        };
+        *cs = Default::default();
+        (text, ms)
     };
 
-    if audio_buffer.is_empty() {
+    tracing::info!(
+        wait_ms = wait_started.elapsed().as_millis() as u64,
+        audio_ms,
+        "Recording finished"
+    );
+
+    if audio_ms == 0 {
         let mut status = state.status.lock().await;
         status.is_processing = false;
         status.last_error = Some("No audio captured".to_string());
@@ -312,46 +506,19 @@ pub async fn stop_recording(
         return Ok(());
     }
 
-    let sample_rate = *state.audio_sample_rate.lock().await;
     let settings = {
         let db = state.db.lock().await;
         load_settings_from_db(&db).await?
     };
 
-    let asr = state.asr.clone();
     let db_arc = state.db.clone();
     let status_arc = state.status.clone();
     let app_clone = app.clone();
 
     tokio::spawn(async move {
-        let start = std::time::Instant::now();
-        let resampled = crate::audio::resample_linear(&audio_buffer, sample_rate, 16000);
-        let audio_ms = (resampled.len() as f64 / 16.0).round() as i64;
-        let language = settings.language.clone();
-
-        let transcribe_result = tokio::task::spawn_blocking(move || {
-            let lang = if language == "auto" { None } else { Some(language.as_str()) };
-            asr.transcribe(&resampled, lang)
-        })
-        .await;
-
-        let raw_text = match transcribe_result {
-            Ok(Ok(text)) => text,
-            Ok(Err(e)) => {
-                let mut status = status_arc.lock().await;
-                status.is_processing = false;
-                status.last_error = Some(format!("Transcription failed: {}", e));
-                emit_status(&app_clone, &status).await;
-                return;
-            }
-            Err(e) => {
-                let mut status = status_arc.lock().await;
-                status.is_processing = false;
-                status.last_error = Some(format!("Transcription task panicked: {}", e));
-                emit_status(&app_clone, &status).await;
-                return;
-            }
-        };
+        // Now measures the wait the user actually experienced, not total transcription
+        // work - most of that already happened while they were speaking.
+        let start = wait_started;
 
         if raw_text.trim().is_empty() {
             let mut status = status_arc.lock().await;
@@ -768,4 +935,69 @@ pub async fn get_log_file_path() -> Result<String, String> {
 #[command]
 pub fn overlay_ready() {
     crate::overlay::mark_ready();
+}
+
+#[cfg(test)]
+mod wire_format_tests {
+    use super::*;
+
+    /// The frontend reads these field names literally (`src/lib/ipc.ts`), and `invoke()`
+    /// returns an unchecked shape — TypeScript asserts the type rather than verifying it.
+    /// So a rename here fails silently at runtime instead of at compile time.
+    ///
+    /// It already happened: `Status` carried `#[serde(rename = "isModelLoaded")]` while the
+    /// UI read `is_model_loaded`, so the field was permanently `undefined`. The Dictate
+    /// screen showed "Add a voice model to begin" no matter what was loaded, the sidebar
+    /// never showed recording state, and `save_settings` could not deserialize what the UI
+    /// sent. One mismatch, four broken features, and nothing anywhere reported an error.
+    ///
+    /// These tests are the contract. If one fails, update `src/lib/ipc.ts` in the same
+    /// commit — do not just change the expected string.
+    #[test]
+    fn status_serializes_with_the_field_names_the_ui_reads() {
+        let json = serde_json::to_value(Status::default()).unwrap();
+        for field in [
+            "is_recording",
+            "is_processing",
+            "is_model_loaded",
+            "loaded_model",
+            "current_text",
+            "last_error",
+            "hotkey_mode",
+            "ai_cleanup_enabled",
+        ] {
+            assert!(
+                json.get(field).is_some(),
+                "Status is missing `{field}` on the wire; src/lib/ipc.ts reads that name"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_round_trip_through_the_wire_shape() {
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        for field in [
+            "hotkey",
+            "hotkey_mode",
+            "whisper_model",
+            "mic_device",
+            "ai_cleanup_enabled",
+            "remove_fillers",
+            "language",
+            "theme",
+            "start_at_login",
+            "sound_cues",
+        ] {
+            assert!(
+                json.get(field).is_some(),
+                "Settings is missing `{field}` on the wire; src/lib/ipc.ts sends that name"
+            );
+        }
+
+        // save_settings deserializes what the UI sends, so the reverse must hold too.
+        let back: Settings = serde_json::from_value(json).expect(
+            "Settings must deserialize from its own serialized form — save_settings depends on it",
+        );
+        assert_eq!(back.hotkey, Settings::default().hotkey);
+    }
 }

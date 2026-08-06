@@ -52,7 +52,7 @@ impl Database {
             "UPDATE settings SET
                 hotkey = $1, hotkey_mode = $2, whisper_model = $3, mic_device = $4,
                 ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
-                theme = $8, start_at_login = $9
+                theme = $8, start_at_login = $9, sound_cues = $10
             WHERE id = 1",
         )
         .bind(&s.hotkey)
@@ -64,6 +64,7 @@ impl Database {
         .bind(&s.language)
         .bind(&s.theme)
         .bind(s.start_at_login)
+        .bind(s.sound_cues)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -301,6 +302,7 @@ pub struct SettingsRow {
     pub language: String,
     pub theme: String,
     pub start_at_login: i32,
+    pub sound_cues: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
