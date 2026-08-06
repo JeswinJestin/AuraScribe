@@ -1,6 +1,6 @@
 [package]
 name = "aurascribe"
-version = "1.0.0"
+version = "0.4.0"
 description = "Free, open-source, privacy-first voice dictation that works everywhere"
 authors = ["AuraScribe Contributors"]
 license = "MIT"

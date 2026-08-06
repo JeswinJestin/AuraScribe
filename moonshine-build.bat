@@ -13,4 +13,6 @@ set "CARGO_BUILD_JOBS=%AURASCRIBE_JOBS%"
 set "CMAKE_BUILD_PARALLEL_LEVEL=%AURASCRIBE_JOBS%"
 
 cd /d "%~dp0"
-npx tauri build --features moonshine
+REM --config merges the Moonshine overlay, which bundles the sherpa-onnx + ONNX Runtime DLLs
+REM next to the exe so the installed app can find them at runtime.
+npx tauri build --features moonshine --config src-tauri/tauri.moonshine.conf.json
