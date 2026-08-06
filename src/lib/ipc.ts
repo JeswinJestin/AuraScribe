@@ -32,6 +32,8 @@ export interface Status {
 export interface ModelInfo {
   id: string
   name: string
+  /** Which backend runs this model. 'whisper' is v1; 'moonshine'/'parakeet' are the newer engines. */
+  engine: 'whisper' | 'moonshine' | 'parakeet'
   size_mb: number
   multilingual: boolean
   /** 1 = fastest */

@@ -8,11 +8,27 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 const MODELS_DIR: &str = "models";
 
+/// Which speech-recognition backend runs a given model.
+///
+/// Whisper (via whisper.cpp) is the original v1 engine and stays the accuracy fallback.
+/// Moonshine is the newer, faster, lower-latency engine (ONNX via sherpa-onnx); Parakeet is
+/// the multilingual/accelerated tier. Serialised lowercase so the frontend can badge models
+/// by engine ("New · Moonshine") without a lookup table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineKind {
+    Whisper,
+    Moonshine,
+    Parakeet,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ModelInfo {
     pub id: String,
     /// Filename stem on HuggingFace, e.g. `large-v3-turbo-q5_0`.
     pub name: String,
+    /// The backend that runs this model — see `EngineKind`.
+    pub engine: EngineKind,
     pub size_mb: u64,
     pub multilingual: bool,
     /// Rough speed rank, 1 = fastest. Used for ordering and UI hints.
@@ -60,11 +76,11 @@ pub struct ModelInfo {
 /// The `large-v3` numbers are why this table exists. A user reasonably picked the model
 /// labelled most accurate and waited **7.9 minutes for 17 seconds of speech** while their
 /// laptop's fan screamed. Nothing in the UI had warned them.
-const MODELS: &[(&str, u64, bool, u8, u8, f32)] = &[
-    // (id, size_mb, multilingual, speed(1=fastest), accuracy(5=best), cpu_cost)
-    ("tiny.en", 75, false, 1, 2, 0.2),  // English · fastest, for weak machines
-    ("base.en", 142, false, 2, 3, 0.5), // English · recommended
-    ("base", 142, true, 2, 2, 0.6),     // multilingual · other languages, same speed
+const MODELS: &[(&str, EngineKind, u64, bool, u8, u8, f32)] = &[
+    // (id, engine, size_mb, multilingual, speed(1=fastest), accuracy(5=best), cpu_cost)
+    ("tiny.en", EngineKind::Whisper, 75, false, 1, 2, 0.2), // English · fastest, weak machines
+    ("base.en", EngineKind::Whisper, 142, false, 2, 3, 0.5), // English · Whisper recommended
+    ("base", EngineKind::Whisper, 142, true, 2, 2, 0.6),    // multilingual · same speed
 ];
 
 /// Whether a GPU backend is compiled in. `use_gpu(true)` is requested unconditionally, but
@@ -94,7 +110,7 @@ pub fn realtime_factor_for(model_id: &str) -> f32 {
     MODELS
         .iter()
         .find(|(id, ..)| *id == model_id)
-        .map(|(_, _, _, _, _, cpu_cost)| realtime_factor(*cpu_cost))
+        .map(|(_, _, _, _, _, _, cpu_cost)| realtime_factor(*cpu_cost))
         .unwrap_or(5.0)
 }
 
@@ -314,14 +330,14 @@ impl WhisperASR {
         // GPU backend compiled in, the turbo tiers come into range.
         let best = MODELS
             .iter()
-            .filter(|(_, _, _, _, _, cost)| realtime_factor(*cost) <= 1.0)
-            .max_by_key(|(_, _, _, _, accuracy, _)| *accuracy)
+            .filter(|(_, _, _, _, _, _, cost)| realtime_factor(*cost) <= 1.0)
+            .max_by_key(|(_, _, _, _, _, accuracy, _)| *accuracy)
             .map(|(id, ..)| *id)
             .unwrap_or("tiny.en");
 
         MODELS
             .iter()
-            .map(|(id, size, multilingual, speed, accuracy, cpu_cost)| {
+            .map(|(id, engine, size, multilingual, speed, accuracy, cpu_cost)| {
                 let path = self.get_model_path(id);
                 let downloaded = path.exists();
                 let factor = realtime_factor(*cpu_cost);
@@ -351,6 +367,7 @@ impl WhisperASR {
                 ModelInfo {
                     id: id.to_string(),
                     name: id.to_string(),
+                    engine: *engine,
                     size_mb: *size,
                     multilingual: *multilingual,
                     speed: *speed,
