@@ -161,7 +161,7 @@ pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<Status, Str
 #[allow(clippy::too_many_arguments)]
 async fn run_chunker(
     app: AppHandle,
-    asr: std::sync::Arc<crate::asr::WhisperASR>,
+    asr: std::sync::Arc<crate::engine::Asr>,
     audio_buffer: std::sync::Arc<tokio::sync::Mutex<Vec<f32>>>,
     sample_rate: std::sync::Arc<tokio::sync::Mutex<u32>>,
     stop_flag: std::sync::Arc<tokio::sync::Mutex<bool>>,
@@ -219,7 +219,7 @@ async fn run_chunker(
 /// Transcribe one piece and append it to the running transcript.
 async fn transcribe_chunk(
     app: &AppHandle,
-    asr: &std::sync::Arc<crate::asr::WhisperASR>,
+    asr: &std::sync::Arc<crate::engine::Asr>,
     status: &std::sync::Arc<tokio::sync::Mutex<Status>>,
     chunk_state: &std::sync::Arc<tokio::sync::Mutex<crate::app_state::ChunkState>>,
     chunk: Vec<f32>,
@@ -423,7 +423,7 @@ pub async fn start_recording(
         status
             .loaded_model
             .as_deref()
-            .map(crate::asr::should_chunk)
+            .map(|m| state.asr.should_chunk(m))
             .unwrap_or(false)
     };
     tracing::info!(live_chunking, "Recording started");
@@ -695,10 +695,7 @@ pub async fn get_available_models(
 
 #[command]
 pub async fn delete_model(state: tauri::State<'_, AppState>, model_id: String) -> Result<(), String> {
-    let path = state.asr.get_model_path(&model_id);
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-    }
+    state.asr.delete_model(&model_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -16,6 +16,9 @@ const MODELS_DIR: &str = "models";
 /// by engine ("New · Moonshine") without a lookup table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
+// Variants are populated per build: Moonshine only under the `moonshine` feature, Parakeet
+// is a declared roadmap engine not yet wired — so some are "never constructed" in some builds.
+#[allow(dead_code)]
 pub enum EngineKind {
     Whisper,
     Moonshine,
@@ -131,7 +134,7 @@ pub fn should_chunk(model_id: &str) -> bool {
 /// that is already thermally limited. whisper.cpp's own guidance is physical cores.
 ///
 /// On the owner's 8-core / 16-thread Ryzen this asks for 8 instead of 16.
-fn worker_threads() -> usize {
+pub fn worker_threads() -> usize {
     physical_cores()
         .or_else(|| std::thread::available_parallelism().ok().map(|n| n.get()))
         .unwrap_or(4)
@@ -197,6 +200,13 @@ impl WhisperASR {
 
     pub fn get_model_path(&self, model_id: &str) -> PathBuf {
         self.models_dir.join(format!("ggml-{}.bin", model_id))
+    }
+
+    /// The shared models directory. The Moonshine engine keeps its bundles in sub-directories
+    /// of this same folder, so the facade hands it this path.
+    #[cfg_attr(not(feature = "moonshine"), allow(dead_code))]
+    pub fn models_dir(&self) -> &std::path::Path {
+        &self.models_dir
     }
 
     pub async fn download_model(

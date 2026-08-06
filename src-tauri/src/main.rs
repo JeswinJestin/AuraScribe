@@ -7,6 +7,7 @@ mod chunking;
 mod cleanup;
 mod commands;
 mod db;
+mod engine;
 mod hotkey;
 mod injection;
 #[cfg(feature = "moonshine")]
@@ -88,7 +89,7 @@ fn main() {
             let app_handle = app.handle().clone();
 
             let db = tauri::async_runtime::block_on(async { Database::new().await })?;
-            let asr = Arc::new(asr::WhisperASR::new()?);
+            let asr = Arc::new(engine::Asr::new()?);
 
             let settings = tauri::async_runtime::block_on(async { db.load_settings().await })?;
 
@@ -106,7 +107,7 @@ fn main() {
             {
                 let asr = asr.clone();
                 let model_id = settings.whisper_model.clone();
-                if asr.get_model_path(&model_id).exists() {
+                if asr.is_downloaded(&model_id) {
                     match asr.load_model(&model_id) {
                         Ok(()) => {
                             tracing::info!(model = %model_id, "Auto-loaded model at startup");
