@@ -92,51 +92,57 @@
     overscroll-behavior: none;
   }
   /*
-    "Glass" appearance. NOT a smaller floating box — the app is full size like every other
-    mode. What changes is the material: a bluish backdrop fills the whole window, the shell
-    is a frosted veil over it, and every card is frosted glass. Dark text stays readable
-    because the frost lightens the blue. Applied via `.glass-bg` on <html> by page.tsx.
+    "Glass" appearance — dark vibrancy. NOT a smaller floating box: the app is full size like
+    every other mode. What changes is the material. A dark, bluish image fills the whole window;
+    the shell is a smoked-glass veil over it and every card is a darker frosted pane. Text is
+    *light* (glass rides on the .dark token set, set in page.tsx), so it stays crisp over the
+    dark backdrop — the macOS "dark vibrancy" model, which is what the supplied arc images want.
 
     Drop a wide image at public/glass-bg.jpg and it becomes the backdrop automatically
-    (referenced as /glass-bg.jpg); until then the layered blue gradient below is used.
+    (referenced as /glass-bg.jpg); the dark blue gradient below is only the fallback.
   */
   .glass-bg body {
-    background-color: #1b3a8f;
+    background-color: #0a0f22;
     background-image:
+      /* a gentle top-down darkening so text-bearing panels always have contrast, */
+      linear-gradient(180deg, rgba(6, 10, 24, 0.35), rgba(6, 10, 24, 0.6)),
+      /* the supplied image, */
       url('/glass-bg.jpg'),
-      radial-gradient(130% 90% at 15% 5%, rgba(120, 150, 255, 0.85), transparent 55%),
-      radial-gradient(120% 100% at 95% 100%, rgba(90, 70, 220, 0.75), transparent 55%),
-      linear-gradient(160deg, #2a4bb5, #16256b);
+      /* and a deep-navy gradient fallback until an image is present. */
+      radial-gradient(120% 90% at 50% 12%, #17224d, transparent 60%),
+      linear-gradient(160deg, #0d1430, #060a18);
     background-size: cover;
     background-position: center;
+    background-attachment: fixed;
   }
-  /* The whole app becomes one frosted pane over that blue, full size. */
+  /* The whole app becomes one smoked-glass pane over that image, full size. */
   .glass-bg .app-shell {
-    background: rgba(255, 255, 255, 0.24) !important;
-    backdrop-filter: blur(34px) saturate(1.25);
-    -webkit-backdrop-filter: blur(34px) saturate(1.25);
+    background: rgba(14, 20, 42, 0.44) !important;
+    backdrop-filter: blur(36px) saturate(1.3);
+    -webkit-backdrop-filter: blur(36px) saturate(1.3);
   }
-  /* Cards read as distinct frosted glass sitting on that pane. */
+  /* Cards read as distinct, slightly lighter frosted glass sitting on that pane. */
   .glass-bg .panel,
   .glass-bg .bg-card,
   .glass-bg [class*='rounded'][class*='bg-card'] {
-    background-color: rgba(255, 255, 255, 0.5) !important;
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-  }
-  /* The dictation stage keeps a bluer tint. */
-  .glass-bg .panel-accent {
-    background: rgba(90, 120, 255, 0.16);
-    border-color: rgba(255, 255, 255, 0.45);
+    background-color: rgba(30, 39, 71, 0.55) !important;
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
   }
-  /* Fields and hairlines go translucent white so the frost reads as one material. */
+  /* The dictation stage keeps a bluer, brighter tint so it reads as the primary surface. */
+  .glass-bg .panel-accent {
+    background: rgba(76, 111, 255, 0.2) !important;
+    border-color: rgba(140, 165, 255, 0.4);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+  /* Fields go translucent-light so the frost reads as one material; hairlines are faint white. */
   .glass-bg .input {
-    background-color: rgba(255, 255, 255, 0.4) !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
   }
   .glass-bg .app-shell * {
-    border-color: rgba(255, 255, 255, 0.42);
+    border-color: rgba(255, 255, 255, 0.14);
   }
 
   .font-display {

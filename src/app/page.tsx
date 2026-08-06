@@ -147,11 +147,11 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement
-    // "glass" is a light palette on the indigo glow backdrop; the others are solid.
+    // "glass" is dark vibrancy: light text on dark frosted panels over the image backdrop,
+    // so it rides on the *dark* token set (see `.glass-bg` in globals.css). The others are solid.
     root.classList.toggle('glass-bg', settings.theme === 'glass')
-    if (settings.theme === 'dark') root.classList.add('dark')
-    else if (settings.theme === 'light' || settings.theme === 'glass')
-      root.classList.remove('dark')
+    if (settings.theme === 'dark' || settings.theme === 'glass') root.classList.add('dark')
+    else if (settings.theme === 'light') root.classList.remove('dark')
     else
       root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
   }, [settings.theme])
