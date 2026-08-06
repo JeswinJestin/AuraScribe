@@ -5,11 +5,38 @@
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
 **Last updated:** 2026-08-06
-**Status:** Working end-to-end on Windows (Whisper default). New multilingual Whisper models
-(`small-q5_1`, `large-v3-turbo-q5_0`) added — accuracy upgrade that runs today. The
-**Moonshine speed engine is built behind the `moonshine` feature but does NOT run yet**
-(startup crash, CRT mismatch — Round 14). Glass appearance is dark-vibrancy. **Owner:** Jeswin
-Thomas Jestin
+**Status:** Working end-to-end on Windows (Whisper default). **Moonshine speed engine now RUNS
+on Windows in a RELEASE build** — the Round-14 crash is a debug-only heap assertion; release
+is stable and loads a Moonshine model (verified, Round 17). Build it with `moonshine-build.bat`
+(release). Glass appearance is dark-vibrancy; toggles/selects/highlights themed. **Owner:**
+Jeswin Thomas Jestin
+
+### Round 17 (2026-08-06) — Moonshine RUNS on Windows (release); UI highlight fixes
+
+**Moonshine works on Windows in a release build — verified by running.** The Round-14
+`0x80000003` abort is a `_CrtIsValidHeapPointer` **debug-only** heap assertion caused by
+sherpa-onnx-c-api.dll's STATIC CRT (/MT) vs the app's DYNAMIC CRT (/MD). Root cause confirmed
+by dumpbin (sherpa dll has no VCRUNTIME140/MSVCP140 dep; onnxruntime.dll does). A `/NODEFAULTLIB`
+link hack fixed debug but broke the release link (mainCRTStartup) — reverted. The key insight:
+**release builds don't run that debug-heap check.** Verified end-to-end: `tauri build
+--features moonshine` (release) launches, survives 60s idle, downloads + LOADS `moonshine-tiny-en`
+(onnxruntime inits, model goes Active) with no crash. So: **build/run Moonshine in RELEASE**
+(`moonshine-build.bat`), not the debug dev server (which still trips the harmless assertion).
+
+**NOT yet verified:** a real Moonshine transcript (needs a human mic test) and the on-CPU
+speed number. **Remaining to ship:** bundle `onnxruntime.dll`, `onnxruntime_providers_shared.dll`,
+`sherpa-onnx-c-api.dll` (in `target/release`) into the NSIS installer via `tauri.conf.json`
+(resources/externalBin) so a distributed installer finds them; the built `.exe` beside those
+DLLs already works locally.
+
+**UI:** toggles switched to an indigo accent (were invisible/black); native `<select>` popups
+themed (were OS-black); active nav + Tap/Hold selection use an indigo glass frost (were muddy
+brown `bg-accent`). Heavy Whisper models (`small`, `large-v3-turbo`) were added then removed —
+too slow on CPU; rule saved: models must be light + fast + accurate (Moonshine is the path).
+
+**Process:** run only ONE app instance (single-instance guard). The old installed copy at
+`C:\Program Files\AuraScribe` is an out-of-date "first version" UI that surfaces if a build
+isn't running — owner is uninstalling it via Windows Settings → Apps.
 
 ### Round 16 (2026-08-06) — Reverted heavy models; toggle + select theming fixed
 
