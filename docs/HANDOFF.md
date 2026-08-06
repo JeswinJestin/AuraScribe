@@ -1060,3 +1060,22 @@ would be over-engineering.
 - **Never show a window before its page confirms it loaded.** Always-on-top, undecorated
   windows turn any load failure into an error box the user cannot dismiss. The overlay's
   `overlay_ready` handshake is the pattern to copy.
+
+### Round 19 (2026-08-06) — ROOT CAUSE of the recurring "old UI" (process fix)
+
+The owner repeatedly saw the OLD UI after changes. **It was never a UI code bug.** Root cause:
+an old copy installed at `C:\Program Files\AuraScribe` is what Windows launches when the owner
+opens AuraScribe normally (shortcut/taskbar/Start). Fresh builds were being launched *directly*
+from `target\debug` / `target\release` — a different exe — so the owner's shortcut kept opening
+the stale installed copy. The single-instance guard (`dev.aurascribe.app`) made whichever copy
+launched first win, compounding the confusion.
+
+**Permanent fix applied:** installed v0.4.0 elevated (`Start-Process setup.exe -ArgumentList /S
+-Verb RunAs`, owner accepts one UAC prompt), which OVERWRITES `C:\Program Files\AuraScribe` with
+the new build + bundled DLLs. Fixed the stale HKCU `Run\AuraScribe` autostart value (it pointed
+at `target\release`) to the installed exe. Verified: the INSTALLED Program Files app runs the new
+UI with `moonshine-base-en` Active, no crash — end-to-end proof the bundled installer works.
+
+**PROCESS RULE (do not repeat the mistake): to show the owner a change, rebuild the installer
+and reinstall (elevated, replacing Program Files) — never launch a loose `target\*` build. There
+must be exactly ONE AuraScribe installed.**
