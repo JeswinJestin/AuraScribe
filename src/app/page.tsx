@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { isTauri } from '@tauri-apps/api/core'
+import { PanelLeft, Minus, Square, X } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { Settings, Status } from '@/lib/ipc'
 import { Sidebar, type View } from '@/components/Sidebar'
+import { WidgetRail } from '@/components/WidgetRail'
 import { DictateView } from '@/components/views/DictateView'
 import { HistoryView } from '@/components/views/HistoryView'
 import { DictionaryView } from '@/components/views/DictionaryView'
@@ -31,8 +33,22 @@ const DEFAULT_SETTINGS: Settings = {
   ai_cleanup_enabled: true,
   remove_fillers: true,
   language: 'en',
-  theme: 'dark',
+  theme: 'light',
   start_at_login: false,
+  sound_cues: true,
+}
+
+/** Frameless-window controls. No-op outside Tauri (e.g. the browser preview). */
+async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    const w = getCurrentWindow()
+    if (action === 'minimize') await w.minimize()
+    else if (action === 'toggleMaximize') await w.toggleMaximize()
+    else await w.close()
+  } catch {
+    /* not in a Tauri window */
+  }
 }
 
 export default function App() {
@@ -73,8 +89,7 @@ export default function App() {
   // Events are the fast path, not the only path. A missed `status-changed` repeatedly
   // stranded the UI insisting no model was loaded while the backend had one in memory,
   // with no way for the user to recover. Re-reading the authoritative state on a short
-  // interval (and on navigation) makes that desync self-healing. get_status is a cheap
-  // in-memory read, so the cost is negligible.
+  // interval (and on navigation) makes that desync self-healing.
   useEffect(() => {
     if (!tauri) return
     let cancelled = false
@@ -103,7 +118,6 @@ export default function App() {
         await ipc.saveSettings(next)
       } catch (e) {
         console.error('Could not save settings:', e)
-        // Put the stored values back so the UI never claims a change that didn't stick.
         try {
           setSettings(await ipc.getSettings())
         } catch {
@@ -133,42 +147,93 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement
+    // "glass" is a light palette on the indigo glow backdrop; the others are solid.
+    root.classList.toggle('glass-bg', settings.theme === 'glass')
     if (settings.theme === 'dark') root.classList.add('dark')
-    else if (settings.theme === 'light') root.classList.remove('dark')
+    else if (settings.theme === 'light' || settings.theme === 'glass')
+      root.classList.remove('dark')
     else
       root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
   }, [settings.theme])
 
-  if (!ready) return <div className="h-screen bg-background" />
+  if (!ready) return <div className="h-screen w-screen bg-background" />
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      <Sidebar
-        view={view}
-        onNavigate={setView}
-        status={status}
-        collapsed={collapsed}
-        onToggleCollapsed={() => setCollapsed((c) => !c)}
-      />
+    // Full-bleed in every appearance — the app fills the frameless window edge to edge.
+    // "Glass" is not a smaller box: it is the same full size, but the shell and its cards
+    // become frosted glass over a bluish backdrop (see `.glass-bg` in globals.css).
+    <div className="h-screen w-screen overflow-hidden">
+      <div className="app-shell flex h-full flex-col overflow-hidden bg-background">
+        {/* Custom titlebar — the window is frameless, so this is the drag handle and the
+            min / maximize / close controls. */}
+        <div
+          data-tauri-drag-region
+          className="flex flex-shrink-0 items-center justify-between border-b px-4 py-2.5"
+        >
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <PanelLeft className="h-[17px] w-[17px]" strokeWidth={1.8} />
+          </button>
 
-      <main className="flex-1 overflow-y-auto px-6 py-6">
-        {view === 'dictate' && (
-          <DictateView
-            status={status}
-            settings={settings}
-            onToggleRecording={toggleRecording}
-            onSaveSettings={saveSettings}
-            onGoToSettings={() => setView('settings')}
-          />
-        )}
-        {view === 'history' && <HistoryView />}
-        {view === 'dictionary' && <DictionaryView />}
-        {view === 'snippets' && <SnippetsView />}
-        {view === 'insights' && <InsightsView />}
-        {view === 'settings' && (
-          <SettingsView settings={settings} status={status} onSaveSettings={saveSettings} />
-        )}
-      </main>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => windowAction('minimize')}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent"
+              aria-label="Minimize"
+            >
+              <Minus className="h-4 w-4" strokeWidth={1.8} />
+            </button>
+            <button
+              onClick={() => windowAction('toggleMaximize')}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent"
+              aria-label="Maximize"
+            >
+              <Square className="h-3 w-3" strokeWidth={1.9} />
+            </button>
+            <button
+              onClick={() => windowAction('close')}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive hover:text-white"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" strokeWidth={1.8} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-1 overflow-hidden">
+          <Sidebar view={view} onNavigate={setView} status={status} collapsed={collapsed} />
+
+          <div className="flex flex-1 gap-5 overflow-hidden px-7 py-7 lg:px-8">
+            <div key={view} className="fade-up flex-[1.7] overflow-y-auto overflow-x-hidden pr-1">
+              {view === 'dictate' && (
+                <DictateView
+                  status={status}
+                  settings={settings}
+                  onToggleRecording={toggleRecording}
+                  onSaveSettings={saveSettings}
+                  onGoToSettings={() => setView('settings')}
+                />
+              )}
+              {view === 'history' && <HistoryView />}
+              {view === 'dictionary' && <DictionaryView />}
+              {view === 'snippets' && <SnippetsView />}
+              {view === 'insights' && <InsightsView />}
+              {view === 'settings' && (
+                <SettingsView settings={settings} status={status} onSaveSettings={saveSettings} />
+              )}
+            </div>
+
+            {/* Contextual right rail — changes with the active tab. Hidden on narrow widths. */}
+            <div className="hidden w-[250px] flex-shrink-0 overflow-y-auto overflow-x-hidden xl:block">
+              <WidgetRail view={view} status={status} settings={settings} />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

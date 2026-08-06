@@ -1,62 +1,48 @@
 'use client'
 
 /**
- * The signal meter — AuraScribe's one signature element.
+ * The signal meter — AuraScribe's one signature element, restyled for the warm-glass system.
  *
- * Flat and dim when idle, ticks rise while listening, a single band sweeps while
- * transcribing. It reports state the way a piece of audio equipment would, which is
- * also the fastest way to answer the only question that matters mid-dictation:
- * "is this thing hearing me?"
+ * A row of ticks sitting on the frosted stage. Short and dim when idle; the ticks pulse in
+ * warm red while listening; a soft indigo opacity-sweep while transcribing. It answers the
+ * only question that matters mid-dictation — "is this thing hearing me?" — without words, and
+ * it is the only element in the interface allowed real motion.
  */
 
-const TICKS = 21
-
-// Fixed pseudo-random heights so the meter looks like a waveform rather than a
-// mechanical sine, without re-randomising on every render.
+// Fixed heights (px) so it reads as a waveform, not a mechanical sine — matches the design.
 const HEIGHTS = [
-  0.35, 0.6, 0.45, 0.85, 0.55, 1, 0.7, 0.4, 0.9, 0.5, 0.75, 0.45, 0.95, 0.6, 0.35, 0.8,
-  0.5, 0.7, 0.4, 0.55, 0.3,
+  30, 45, 60, 40, 70, 55, 35, 50, 65, 45, 30, 55, 70, 40, 60, 35, 50, 65, 45, 30, 55, 40, 60, 45,
 ]
 
 export type MeterState = 'idle' | 'listening' | 'processing'
 
 export function SignalMeter({ state }: { state: MeterState }) {
-  if (state === 'processing') {
-    return (
-      <div
-        className="relative h-10 w-full overflow-hidden rounded-[var(--radius)] bg-secondary"
-        role="img"
-        aria-label="Transcribing"
-      >
-        <div className="absolute inset-y-0 w-1/4 signal-sweep bg-[hsl(var(--standby))]/25" />
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="mono text-[11px] uppercase tracking-widest text-[hsl(var(--standby))]">
-            transcribing
-          </span>
-        </div>
-      </div>
-    )
-  }
-
   const listening = state === 'listening'
+  const processing = state === 'processing'
+
+  const scale = listening ? 1 : processing ? 0.55 : 0.24
+  const color = listening
+    ? 'hsl(var(--record))'
+    : processing
+    ? 'hsl(var(--primary))'
+    : 'hsl(var(--faint) / 0.6)'
 
   return (
     <div
-      className="flex h-10 items-center justify-center gap-[3px] rounded-[var(--radius)] bg-secondary px-3"
+      className="flex h-[38px] items-end justify-center gap-[3px]"
       role="img"
-      aria-label={listening ? 'Listening' : 'Idle'}
+      aria-label={listening ? 'Listening' : processing ? 'Transcribing' : 'Idle'}
     >
-      {Array.from({ length: TICKS }).map((_, i) => (
+      {HEIGHTS.map((h, i) => (
         <span
           key={i}
-          className={`w-[3px] rounded-full ${
-            listening
-              ? 'signal-tick bg-[hsl(var(--record))]'
-              : 'bg-muted-foreground/25'
+          className={`w-[3px] rounded-[2px] ${
+            listening ? 'tick-pulse' : processing ? 'soft-sweep' : ''
           }`}
           style={{
-            height: listening ? `${HEIGHTS[i] * 22}px` : '3px',
-            animationDelay: listening ? `${(i % 7) * 90}ms` : undefined,
+            height: `${Math.round(h * scale)}px`,
+            background: color,
+            animationDelay: state === 'idle' ? undefined : `${(i % 8) * 70}ms`,
           }}
         />
       ))}
