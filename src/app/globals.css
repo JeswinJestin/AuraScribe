@@ -3,72 +3,77 @@
 @tailwind utilities;
 
 /*
-  AuraScribe design system — "instrument".
+  AuraScribe design system — "warm glass" (redesign).
 
-  The app is a piece of audio equipment, not a dashboard: cool graphite panels,
-  hairline rules, and a single signal-cyan accent used only to mean "live".
-  Colour is state, never decoration — cyan = ready, red = recording, amber = working.
+  A cream, softly-lit panel floating on a deep indigo glow. Newsreader serif for display,
+  IBM Plex Sans for the interface, IBM Plex Mono for machine-reported values. A single
+  indigo accent (#4C6FFF) carries interactivity; warm red means recording. Where the old
+  system was an austere instrument, this one is a calm, premium consumer surface — without
+  giving up legibility, both themes, or the accessibility floor.
 */
 
 @layer base {
   :root {
-    --background: 210 20% 98%;
-    --foreground: 215 27% 9%;
-    --card: 0 0% 100%;
-    --card-foreground: 215 27% 9%;
+    --background: 40 24% 96%;      /* #F7F5F0 warm cream — the panel */
+    --foreground: 40 8% 10%;       /* #1C1B18 ink */
+    --card: 0 0% 100%;             /* #FFFFFF */
+    --card-foreground: 40 8% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 215 27% 9%;
+    --popover-foreground: 40 8% 10%;
 
-    /* signal-cyan: darkened in light mode so it still passes contrast on white */
-    --primary: 186 86% 30%;
+    --primary: 227 100% 65%;       /* #4C6FFF indigo */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 212 20% 95%;
-    --secondary-foreground: 215 27% 9%;
-    --muted: 212 20% 95%;
-    --muted-foreground: 214 12% 42%;
-    --accent: 212 20% 95%;
-    --accent-foreground: 215 27% 9%;
+    --secondary: 40 24% 96%;       /* input/field fill = cream */
+    --secondary-foreground: 40 8% 10%;
+    --muted: 41 25% 91%;
+    --muted-foreground: 40 6% 51%; /* #8B877D */
+    --accent: 41 25% 91%;          /* #EFEBE2 hover */
+    --accent-foreground: 40 8% 10%;
 
-    --destructive: 357 70% 48%;
+    --destructive: 5 64% 42%;      /* #B23327 warm red */
     --destructive-foreground: 0 0% 100%;
 
-    --record: 357 74% 52%;
-    --standby: 32 82% 42%;
+    --record: 5 64% 42%;           /* listening */
+    --standby: 227 100% 65%;       /* transcribing — indigo sweep */
 
-    --border: 212 20% 89%;
-    --input: 212 20% 89%;
-    --ring: 186 86% 30%;
-    --radius: 0.625rem;
+    --border: 43 16% 89%;          /* #E8E5DD hairline */
+    --border-soft: 43 22% 92%;     /* #F0EEE7 inner dividers */
+    --input: 43 16% 89%;
+    --ring: 227 100% 65%;
+    --faint: 43 11% 64%;           /* #ADA99C faintest text */
+    --radius: 0.875rem;            /* 14px cards */
   }
 
   .dark {
-    --background: 220 22% 7%;
-    --foreground: 216 25% 92%;
-    --card: 219 19% 11%;
-    --card-foreground: 216 25% 92%;
-    --popover: 219 19% 11%;
-    --popover-foreground: 216 25% 92%;
+    --background: 40 9% 11%;        /* warm charcoal panel */
+    --foreground: 40 18% 92%;
+    --card: 40 8% 14%;
+    --card-foreground: 40 18% 92%;
+    --popover: 40 8% 14%;
+    --popover-foreground: 40 18% 92%;
 
-    --primary: 186 68% 51%;
-    --primary-foreground: 220 22% 7%;
+    --primary: 227 100% 71%;
+    --primary-foreground: 40 9% 11%;
 
-    --secondary: 218 17% 15%;
-    --secondary-foreground: 216 25% 92%;
-    --muted: 218 17% 15%;
-    --muted-foreground: 217 12% 60%;
-    --accent: 218 17% 15%;
-    --accent-foreground: 216 25% 92%;
+    --secondary: 40 7% 17%;
+    --secondary-foreground: 40 18% 92%;
+    --muted: 40 7% 17%;
+    --muted-foreground: 40 8% 62%;
+    --accent: 40 7% 19%;
+    --accent-foreground: 40 18% 92%;
 
-    --destructive: 357 84% 64%;
-    --destructive-foreground: 220 22% 7%;
+    --destructive: 5 74% 60%;
+    --destructive-foreground: 40 9% 11%;
 
-    --record: 357 84% 64%;
-    --standby: 37 80% 57%;
+    --record: 5 74% 60%;
+    --standby: 227 100% 71%;
 
-    --border: 218 17% 17%;
-    --input: 218 17% 20%;
-    --ring: 186 68% 51%;
+    --border: 40 6% 22%;
+    --border-soft: 40 6% 19%;
+    --input: 40 6% 24%;
+    --ring: 227 100% 71%;
+    --faint: 40 6% 48%;
   }
 }
 
@@ -76,104 +81,188 @@
   * {
     border-color: hsl(var(--border));
   }
+  html,
+  body {
+    height: 100%;
+  }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "rlig" 1, "calt" 1, "cv05" 1;
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-feature-settings: 'cv05' 1, 'ss01' 1;
     overscroll-behavior: none;
   }
-  /* Technical readouts — hotkeys, model ids, counts — share one voice. */
+  /*
+    "Glass" appearance. NOT a smaller floating box — the app is full size like every other
+    mode. What changes is the material: a bluish backdrop fills the whole window, the shell
+    is a frosted veil over it, and every card is frosted glass. Dark text stays readable
+    because the frost lightens the blue. Applied via `.glass-bg` on <html> by page.tsx.
+
+    Drop a wide image at public/glass-bg.jpg and it becomes the backdrop automatically
+    (referenced as /glass-bg.jpg); until then the layered blue gradient below is used.
+  */
+  .glass-bg body {
+    background-color: #1b3a8f;
+    background-image:
+      url('/glass-bg.jpg'),
+      radial-gradient(130% 90% at 15% 5%, rgba(120, 150, 255, 0.85), transparent 55%),
+      radial-gradient(120% 100% at 95% 100%, rgba(90, 70, 220, 0.75), transparent 55%),
+      linear-gradient(160deg, #2a4bb5, #16256b);
+    background-size: cover;
+    background-position: center;
+  }
+  /* The whole app becomes one frosted pane over that blue, full size. */
+  .glass-bg .app-shell {
+    background: rgba(255, 255, 255, 0.24) !important;
+    backdrop-filter: blur(34px) saturate(1.25);
+    -webkit-backdrop-filter: blur(34px) saturate(1.25);
+  }
+  /* Cards read as distinct frosted glass sitting on that pane. */
+  .glass-bg .panel,
+  .glass-bg .bg-card,
+  .glass-bg [class*='rounded'][class*='bg-card'] {
+    background-color: rgba(255, 255, 255, 0.5) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  /* The dictation stage keeps a bluer tint. */
+  .glass-bg .panel-accent {
+    background: rgba(90, 120, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.45);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+  /* Fields and hairlines go translucent white so the frost reads as one material. */
+  .glass-bg .input {
+    background-color: rgba(255, 255, 255, 0.4) !important;
+  }
+  .glass-bg .app-shell * {
+    border-color: rgba(255, 255, 255, 0.42);
+  }
+
+  .font-display {
+    font-family: var(--font-display), Georgia, serif;
+  }
   .mono,
   kbd {
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-    font-feature-settings: "tnum" 1;
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-feature-settings: 'tnum' 1;
   }
+
   :focus-visible {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
+    border-radius: 4px;
   }
   ::selection {
-    background: hsl(var(--primary) / 0.25);
+    background: hsl(var(--primary));
+    color: #fff;
   }
 
-  /* Slim, rounded scrollbars. The default Windows bar is wide and grey and makes an
-     otherwise quiet interface look unfinished. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+    scrollbar-color: hsl(var(--faint) / 0.5) transparent;
   }
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.28);
+    background-color: hsl(var(--faint) / 0.5);
     border-radius: 999px;
-    /* Inset the thumb so it reads as a floating pill rather than a filled gutter. */
-    border: 3px solid transparent;
-    background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--muted-foreground) / 0.5);
-    background-clip: content-box;
+    background-color: hsl(var(--faint) / 0.75);
   }
+  ::-webkit-scrollbar-track,
   ::-webkit-scrollbar-corner {
     background: transparent;
   }
 }
 
 @layer components {
+  /* The frosted app shell that floats on the glow. */
+  .glass {
+    background: hsl(var(--background) / 0.86);
+    backdrop-filter: blur(28px) saturate(1.1);
+    -webkit-backdrop-filter: blur(28px) saturate(1.1);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 40px 100px rgba(0, 0, 0, 0.45);
+  }
+  .dark .glass {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  /* A plain white content card. */
   .panel {
     @apply rounded-[var(--radius)] border bg-card text-card-foreground;
   }
 
+  /* A blue-tinted frosted card — the dictation stage and CTA widgets. */
+  .panel-accent {
+    border-radius: 1rem;
+    background: hsl(var(--primary) / 0.07);
+    border: 1px solid hsl(var(--primary) / 0.2);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-[var(--radius)] px-4 py-2
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2
            text-sm font-medium transition-colors duration-150
            disabled:pointer-events-none disabled:opacity-40;
   }
   .btn-primary {
-    @apply btn bg-primary text-primary-foreground hover:bg-primary/90;
+    @apply btn bg-primary text-primary-foreground hover:brightness-95;
+  }
+  /* Ink-filled pill — the primary "+ Add" affordance in the design. */
+  .btn-ink {
+    @apply btn text-white hover:opacity-90;
+    background: hsl(var(--foreground));
   }
   .btn-secondary {
-    @apply btn border bg-secondary text-secondary-foreground hover:bg-accent;
+    @apply btn border bg-secondary text-foreground hover:bg-accent;
   }
   .btn-ghost {
     @apply btn text-muted-foreground hover:bg-accent hover:text-foreground;
   }
   .btn-danger {
-    @apply btn border border-destructive/30 text-destructive hover:bg-destructive/10;
+    @apply btn text-destructive hover:bg-destructive/5;
+    border: 1px solid hsl(var(--destructive) / 0.3);
   }
   .btn-sm {
-    @apply px-2.5 py-1 text-xs;
+    @apply px-3 py-1 text-xs;
   }
 
   .input {
-    @apply flex h-9 w-full rounded-[var(--radius)] border bg-background px-3 py-1.5 text-sm
+    @apply flex w-full rounded-[10px] border bg-secondary px-3 py-2.5 text-sm
            placeholder:text-muted-foreground focus-visible:border-primary
            disabled:cursor-not-allowed disabled:opacity-50 transition-colors;
-    border-color: hsl(var(--input));
+    border-color: hsl(var(--border));
   }
 
+  /* Sidebar row. Icon lives in a fixed slot so collapsing doesn't shift it. */
   .nav-item {
-    @apply flex w-full items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-1.5 text-sm
-           text-muted-foreground transition-colors duration-150
-           hover:bg-accent hover:text-foreground;
+    @apply flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5
+           text-[13.5px] text-muted-foreground transition-colors duration-150
+           hover:bg-accent;
   }
   .nav-item-active {
-    @apply bg-accent text-foreground;
+    @apply bg-accent font-semibold text-foreground;
   }
 
   .kbd {
-    @apply mono inline-flex items-center rounded border bg-secondary px-1.5 py-0.5
-           text-[11px] font-medium text-muted-foreground;
+    @apply mono inline-flex items-center rounded-md border bg-secondary px-2 py-0.5
+           text-[11.5px] font-medium text-foreground;
   }
 
-  /* Status dot: the one place colour is allowed to shout. */
   .dot {
     @apply inline-block h-1.5 w-1.5 shrink-0 rounded-full;
+  }
+
+  /* Eyebrow label above cards — mono, spaced, faint. */
+  .eyebrow {
+    @apply mono text-[10px] uppercase tracking-[0.08em];
+    color: hsl(var(--faint));
   }
 }
 
@@ -182,45 +271,32 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Signature: the signal meter. Ticks idle flat, rise while listening. */
-  @keyframes signal-tick {
-    0%,
-    100% {
-      transform: scaleY(0.15);
-    }
-    50% {
-      transform: scaleY(1);
-    }
+  /* The meter's ticks pulse vertically while listening. */
+  @keyframes tickPulse {
+    0%, 100% { transform: scaleY(0.55); }
+    50% { transform: scaleY(1); }
   }
-  .signal-tick {
-    transform-origin: center;
-    animation: signal-tick 900ms ease-in-out infinite;
+  .tick-pulse {
+    transform-origin: bottom;
+    animation: tickPulse 0.9s ease-in-out infinite;
   }
 
-  @keyframes signal-sweep {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(400%);
-    }
+  /* A soft opacity sweep while transcribing. */
+  @keyframes softSweep {
+    0% { opacity: 0.35; }
+    50% { opacity: 1; }
+    100% { opacity: 0.35; }
   }
-  .signal-sweep {
-    animation: signal-sweep 1.1s linear infinite;
+  .soft-sweep {
+    animation: softSweep 0.9s ease-in-out infinite;
   }
 
   @keyframes fade-up {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
   }
   .fade-up {
-    animation: fade-up 180ms ease-out both;
+    animation: fade-up 200ms ease-out both;
   }
 }
 
