@@ -47,7 +47,7 @@ export function HistoryView() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div>
       <PageHeader
         title="History"
         description="Everything you have dictated, stored only on this machine."

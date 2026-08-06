@@ -47,13 +47,13 @@ export function SnippetsView() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div>
       <PageHeader
         title="Snippets"
         description="Say a short phrase, get the long text you would rather not repeat."
       />
 
-      <div className="panel mb-3 space-y-2.5 p-3">
+      <div className="mb-3.5 space-y-3 rounded-[14px] border bg-card p-[18px]">
         <label className="block">
           <span className="mb-1 block text-xs font-medium">When you say</span>
           <input

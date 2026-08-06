@@ -11,8 +11,10 @@ export interface Settings {
   ai_cleanup_enabled: boolean
   remove_fillers: boolean
   language: string
-  theme: 'light' | 'dark' | 'system'
+  /** 'glass' = light palette on the indigo-glow backdrop (the floating look). */
+  theme: 'light' | 'dark' | 'system' | 'glass'
   start_at_login: boolean
+  sound_cues: boolean
 }
 
 export interface Status {
@@ -36,9 +38,14 @@ export interface ModelInfo {
   speed: number
   /** 5 = most accurate */
   accuracy: number
+  /** Best choice on THIS machine, computed from measured speed — not a static flag. */
   recommended: boolean
   downloaded: boolean
   path: string | null
+  /** Processing time as a multiple of speech length here. Below 1.0 beats real time. */
+  realtime_factor: number
+  /** Present when this model would be a bad experience on this hardware. */
+  warning: string | null
 }
 
 export interface UsageStats {

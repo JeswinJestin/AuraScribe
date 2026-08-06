@@ -5,13 +5,16 @@ import { Mic, Loader2 } from 'lucide-react'
 import { overlayReady } from '@/lib/ipc'
 import { listen } from '@tauri-apps/api/event'
 
+// Field names must match the Rust `Status` wire format exactly. They are snake_case;
+// this file previously used camelCase, which happened to match an older serde rename.
+// When that rename was dropped everywhere else, this was the only place still on it.
 interface Status {
-  isRecording: boolean
-  isProcessing: boolean
+  is_recording: boolean
+  is_processing: boolean
 }
 
 export default function OverlayPage() {
-  const [status, setStatus] = useState<Status>({ isRecording: false, isProcessing: false })
+  const [status, setStatus] = useState<Status>({ is_recording: false, is_processing: false })
 
   useEffect(() => {
     document.documentElement.style.background = 'transparent'
@@ -29,10 +32,10 @@ export default function OverlayPage() {
     }
   }, [])
 
-  const listening = status.isRecording
-  const label = listening ? 'Listening…' : status.isProcessing ? 'Processing…' : ''
+  const listening = status.is_recording
+  const label = listening ? 'Listening…' : status.is_processing ? 'Processing…' : ''
 
-  if (!listening && !status.isProcessing) {
+  if (!listening && !status.is_processing) {
     return null
   }
 

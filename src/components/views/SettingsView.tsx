@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Loader2, Check, Trash2, Globe } from 'lucide-react'
+import { Download, Loader2, Check, Trash2, Globe, AlertTriangle } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { ModelInfo, Settings, Status } from '@/lib/ipc'
 import { PageHeader, Section, ErrorNote, Toggle } from '@/components/ui'
@@ -129,7 +129,7 @@ export function SettingsView({
   }
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-3">
+    <div className="flex flex-col gap-3.5 pb-6">
       <PageHeader title="Settings" />
 
       <Section
@@ -177,10 +177,25 @@ export function SettingsView({
                         ? `${(m.size_mb / 1000).toFixed(1)} GB`
                         : `${m.size_mb} MB`}
                       {' · '}
-                      {speedLabel(m.speed)}
+                      {m.realtime_factor <= 1
+                        ? `${m.realtime_factor.toFixed(1)}x — faster than you speak`
+                        : `${m.realtime_factor.toFixed(1)}x the length of what you say`}
                       {' · '}
                       accuracy {m.accuracy}/5
                     </div>
+
+                    {/* Shown before download, not after. A user picked the model badged most
+                        accurate and waited 7.9 minutes for 17 seconds of speech. */}
+                    {m.warning && (
+                      <p
+                        className={`mt-1.5 flex items-start gap-1.5 text-[11px] leading-snug ${
+                          m.realtime_factor > 2 ? 'text-record' : 'text-standby'
+                        }`}
+                      >
+                        <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+                        <span>{m.warning}</span>
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -336,6 +351,11 @@ export function SettingsView({
             onChange={(v) => onSaveSettings({ start_at_login: v })}
             label="Start when I sign in"
           />
+          <Toggle
+            checked={settings.sound_cues}
+            onChange={(v) => onSaveSettings({ sound_cues: v })}
+            label="Play a sound when dictation starts and stops"
+          />
           <label className="flex items-center justify-between gap-4">
             <span className="text-sm">Appearance</span>
             <select
@@ -346,6 +366,7 @@ export function SettingsView({
               <option value="system">Match system</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
+              <option value="glass">Glass</option>
             </select>
           </label>
         </div>

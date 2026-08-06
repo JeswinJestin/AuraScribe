@@ -27,7 +27,7 @@ export function InsightsView() {
 
   if (stats.total_dictations === 0) {
     return (
-      <div className="mx-auto max-w-2xl">
+      <div>
         <PageHeader title="Insights" description="How much you actually dictate." />
         <EmptyState
           title="No data yet"
@@ -42,10 +42,10 @@ export function InsightsView() {
   const savedMinutes = Math.max(0, typedMinutes - spokenMinutes)
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div>
       <PageHeader title="Insights" description="How much you actually dictate." />
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat value={stats.total_words.toLocaleString()} label="Words dictated" />
         <Stat
           value={stats.words_per_minute || '—'}

@@ -47,16 +47,16 @@ export function DictionaryView() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div>
       <PageHeader
         title="Words"
         description="Names, jargon and acronyms you want spelled your way every time."
       />
 
-      <div className="panel mb-3 p-3">
-        <div className="flex items-end gap-2">
+      <div className="mb-3.5 rounded-[14px] border bg-card p-[18px]">
+        <div className="flex items-end gap-3">
           <label className="flex-1">
-            <span className="mb-1 block text-xs font-medium">Heard as</span>
+            <span className="mb-1.5 block text-[12px] text-muted-foreground">Heard as</span>
             <input
               className="input"
               placeholder="kubernetes"
@@ -65,9 +65,9 @@ export function DictionaryView() {
               onKeyDown={(e) => e.key === 'Enter' && add()}
             />
           </label>
-          <ArrowRight className="mb-2.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <ArrowRight className="mb-3 h-4 w-4 shrink-0 text-muted-foreground" />
           <label className="flex-1">
-            <span className="mb-1 block text-xs font-medium">Written as</span>
+            <span className="mb-1.5 block text-[12px] text-muted-foreground">Written as</span>
             <input
               className="input"
               placeholder="Kubernetes"
@@ -76,7 +76,7 @@ export function DictionaryView() {
               onKeyDown={(e) => e.key === 'Enter' && add()}
             />
           </label>
-          <button onClick={add} disabled={!word.trim() || !replacement.trim()} className="btn-primary">
+          <button onClick={add} disabled={!word.trim() || !replacement.trim()} className="btn-ink">
             <Plus className="h-4 w-4" />
             Add
           </button>
