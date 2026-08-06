@@ -162,6 +162,18 @@
     background-color: #16203c;
     color: #e8ecf7;
   }
+  /*
+    Selection / hover highlights. The default `bg-accent` is a warm charcoal that reads as
+    muddy brown over glass. In glass, highlights should be frosted instead: a faint white
+    frost on hover, an indigo frost for the active row — matching the app's indigo accent.
+  */
+  .glass-bg .nav-item:hover {
+    background-color: rgba(255, 255, 255, 0.07) !important;
+  }
+  .glass-bg .nav-item-active {
+    background-color: rgba(76, 111, 255, 0.2) !important;
+    color: #fff;
+  }
 
   .font-display {
     font-family: var(--font-display), Georgia, serif;

@@ -124,7 +124,9 @@ export function DictateView({
               key={mode}
               onClick={() => onSaveSettings({ hotkey_mode: mode })}
               className={`flex-1 rounded-xl border px-4 py-3 text-left transition-colors ${
-                active ? 'border-foreground bg-secondary' : 'hover:bg-accent'
+                active
+                  ? 'border-primary/50 bg-primary/10 text-foreground'
+                  : 'hover:bg-primary/5'
               }`}
             >
               <div className="text-[13px] font-semibold">{mode === 'toggle' ? 'Tap' : 'Hold'}</div>
