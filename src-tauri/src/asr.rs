@@ -84,12 +84,9 @@ const MODELS: &[(&str, EngineKind, u64, bool, u8, u8, f32)] = &[
     ("tiny.en", EngineKind::Whisper, 75, false, 1, 2, 0.2), // English · fastest, weak machines
     ("base.en", EngineKind::Whisper, 142, false, 2, 3, 0.5), // English · Whisper recommended
     ("base", EngineKind::Whisper, 142, true, 2, 2, 0.6),    // multilingual · same speed
-    // Bigger, more accurate MULTILINGUAL models — these run today via the existing whisper.cpp
-    // engine (no new native code, no crash). More accurate than base, but heavier on a
-    // CPU-only machine; the model list shows the real per-clip wait so the trade is explicit.
-    // cpu_cost is a conservative estimate until benchmarked on this machine.
-    ("small-q5_1", EngineKind::Whisper, 190, true, 3, 4, 1.3), // multilingual · clearly better
-    ("large-v3-turbo-q5_0", EngineKind::Whisper, 574, true, 4, 5, 2.5), // top accuracy · slow on CPU
+    // NOTE: heavier Whisper models (small, large-v3-turbo) are deliberately NOT offered. On a
+    // CPU they are far too slow (minutes per clip) — the opposite of what this app is for. The
+    // path to better accuracy is a light, fast engine (Moonshine), not a bigger Whisper model.
 ];
 
 /// Whether a GPU backend is compiled in. `use_gpu(true)` is requested unconditionally, but
