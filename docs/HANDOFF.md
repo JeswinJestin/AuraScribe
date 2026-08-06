@@ -36,11 +36,32 @@ Plus `moonshine-dev.bat` / `moonshine-build.bat` (mirror dev/build with `--featu
 
 **What is verified:** the code compiles in both configurations (`cargo check` default and
 `--features moonshine`, both clean). The sherpa-onnx prebuilt libs download and link.
-**What is NOT verified — the project's own rule says say so:** no real Moonshine transcript
-or benchmark has been produced yet. That needs a human run: `moonshine-dev.bat`, download a
-Moonshine model in Settings, dictate, and confirm the transcript + timing. Do this before
-trusting the `cpu_cost`/accuracy estimates in `moonshine.rs` (they are placeholders pending
-the benchmark).
+
+**RUNTIME FINDING (2026-08-06, found by running `moonshine-dev.bat`): the Moonshine build
+crashes on startup — NOT usable yet.** The debug build compiled and linked
+(`Finished ... 3m50s`), the app launched and served the UI (`GET / 200`), then aborted with
+`exit code: 0x80000003` (STATUS_BREAKPOINT) and **no Rust panic** — i.e. a native abort. The
+link step carried `LINK : warning LNK4098: defaultlib 'msvcrt' conflicts with use of other
+libs`, which appears only with the `moonshine` feature. Diagnosis: a **CRT mismatch** between
+the prebuilt sherpa-onnx / ONNX Runtime and whisper.cpp + Rust; the abort fires when the
+startup auto-load of the Whisper model allocates across the mismatched CRT boundary (the
+debug heap trips `__debugbreak`). This is a Windows native-linking issue, not an engine-code
+bug — the Rust integration is correct and compiles.
+
+**Two Windows-integration tasks remain before Moonshine runs/ships (next focused work):**
+1. **Unify the CRT.** Determine which CRT the sherpa-onnx prebuilt uses (dumpbin on the libs
+   in `~/.cargo`/the sherpa-rs-sys OUT_DIR, or sherpa-rs Windows docs) and match everything to
+   it — either force whisper.cpp's CMake to that runtime (`CMAKE_MSVC_RUNTIME_LIBRARY` via a
+   toolchain file) and/or set Rust `crt-static` accordingly. Verify the LNK4098 warning is
+   gone AND the app runs without aborting. Do not guess the direction — inspect the prebuilt.
+2. **Bundle `onnxruntime.dll`** (and any sherpa dll) into the Tauri bundle so the installed
+   release can find it at runtime (`tauri.conf.json` resources/externalBin). In dev the build
+   script drops the dll in `target/debug`, so dev "finds" it; the NSIS installer will not
+   include it without config.
+
+**Still NOT verified:** no real Moonshine transcript or benchmark — blocked by the crash
+above. Once it runs, benchmark on an idle CPU and replace the `cpu_cost`/accuracy placeholders
+in `moonshine.rs`.
 
 **The open decision — installer size vs. shipping Moonshine.** `sherpa-onnx` links the ONNX
 Runtime into the binary at build time, adding well over 10 MB. Enabling `moonshine` in the
