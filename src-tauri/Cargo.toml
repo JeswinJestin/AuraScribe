@@ -64,6 +64,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Ole",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_SystemInformation",
 ] }
 winreg = "0.52"
 
@@ -76,6 +77,17 @@ core-graphics = "0.24"
 [features]
 default = ["whisper"]
 whisper = ["dep:whisper-rs"]
+
+# GPU backends. `use_gpu(true)` is requested unconditionally in asr.rs but is a no-op unless
+# one of these is compiled in — which is why transcription runs on CPU by default no matter
+# what hardware is present. Each needs its SDK installed to build:
+#   vulkan - Vulkan SDK. Portable across NVIDIA/AMD/Intel, so one build serves everyone.
+#   cuda   - CUDA Toolkit. Fastest on NVIDIA, but NVIDIA-only and a much larger install.
+# Offloading to the GPU produces *less* heat than CPU inference, not more: the work finishes
+# in a fraction of the time at a fraction of the energy, instead of pinning every core.
+vulkan = ["whisper", "whisper-rs/vulkan"]
+cuda = ["whisper", "whisper-rs/cuda"]
+metal = ["whisper", "whisper-rs/metal"]
 
 [profile.release]
 opt-level = 3
