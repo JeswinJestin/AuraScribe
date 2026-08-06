@@ -144,6 +144,24 @@
   .glass-bg .app-shell * {
     border-color: rgba(255, 255, 255, 0.14);
   }
+  /*
+    Native <select> dropdowns default to an OS black popup, which looked jarring in dark/glass.
+    The open option list can't be made truly translucent (the OS draws it), but it CAN follow
+    the theme: options track the popover tokens in light/dark, and take a solid navy that
+    matches the frosted panels in glass. The closed control itself reads as frosted glass.
+  */
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+  .glass-bg select.input {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: hsl(var(--foreground));
+  }
+  .glass-bg select.input option {
+    background-color: #16203c;
+    color: #e8ecf7;
+  }
 
   .font-display {
     font-family: var(--font-display), Georgia, serif;

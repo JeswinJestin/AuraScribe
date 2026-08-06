@@ -119,13 +119,15 @@ export function Toggle({
         )}
       </span>
       <span
-        className={`relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors ${
-          checked ? 'bg-foreground' : 'bg-border'
+        className={`relative h-[22px] w-[38px] shrink-0 rounded-full border transition-colors ${
+          checked
+            ? 'border-transparent bg-primary'
+            : 'border-white/20 bg-foreground/20'
         }`}
       >
         <span
           className={`absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-all ${
-            checked ? 'left-[19px]' : 'left-[3px]'
+            checked ? 'left-[18px]' : 'left-[3px]'
           }`}
         />
       </span>
