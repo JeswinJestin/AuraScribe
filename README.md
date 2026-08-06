@@ -11,8 +11,8 @@ Free, open-source, local-first voice dictation. Press a hotkey, speak, and clean
 Most people should just grab the installer — no build tools, no cloning the repo.
 
 1. Go to the [**Releases**](https://github.com/JeswinJestin/AuraScribe/releases/latest) page.
-2. Download **`AuraScribe_x64-setup.exe`** (~4.6 MB).
-3. Run it. AuraScribe installs and opens.
+2. Under **Assets**, download the installer — **`AuraScribe_x64-setup.exe`** (~4.6 MB).
+3. Run it (Windows SmartScreen may warn on a new unsigned app — choose *More info → Run anyway*). AuraScribe installs and opens.
 4. In **Settings → Voice model**, click **Download & Use** on `base.en` (recommended). It downloads once, then works offline forever.
 5. Click into any text field, press **Ctrl+Shift+Space**, speak, press again — your words appear at the cursor.
 
