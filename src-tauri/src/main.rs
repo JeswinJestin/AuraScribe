@@ -9,6 +9,8 @@ mod commands;
 mod db;
 mod hotkey;
 mod injection;
+#[cfg(feature = "moonshine")]
+mod moonshine;
 mod overlay;
 mod sound;
 mod system;

@@ -40,6 +40,11 @@ cpal = "0.15"
 # distil models available — accuracy near large-v3 at a fraction of the runtime.
 whisper-rs = { version = "0.16", optional = true }
 
+# Moonshine / Parakeet ASR via sherpa-onnx (ONNX Runtime). The newer, faster engine.
+# `download-binaries` fetches a prebuilt, cached sherpa-onnx + onnxruntime for the target,
+# so there is no whisper-style CMake build. `directml`/`cuda` (opt-in, later) add GPU.
+sherpa-rs = { version = "0.6.8", optional = true, features = ["download-binaries"] }
+
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
 
@@ -77,6 +82,10 @@ core-graphics = "0.24"
 [features]
 default = ["whisper"]
 whisper = ["dep:whisper-rs"]
+
+# Moonshine engine (ONNX via sherpa-onnx). Opt-in until the download + transcribe path is
+# proven by a real transcript on a real machine; it will join `default` once verified.
+moonshine = ["dep:sherpa-rs"]
 
 # GPU backends. `use_gpu(true)` is requested unconditionally in asr.rs but is a no-op unless
 # one of these is compiled in — which is why transcription runs on CPU by default no matter
