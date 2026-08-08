@@ -254,6 +254,8 @@ fn main() {
             commands::delete_app_profile,
             commands::get_transcripts,
             commands::clear_transcripts,
+            commands::transcript_daily_counts,
+            commands::delete_transcripts_between,
             commands::get_stats,
             commands::list_audio_devices,
             commands::set_start_at_login,

@@ -305,6 +305,43 @@ impl Database {
         sqlx::query("DELETE FROM transcripts").execute(&self.pool).await?;
         Ok(())
     }
+
+    /// Dictation count per **local** calendar day since `since_unix`, for the usage heatmap.
+    /// Grouping uses `localtime` so a day matches what the user sees in their timezone.
+    pub async fn daily_counts(&self, since_unix: i64) -> Result<Vec<DailyCount>, sqlx::Error> {
+        sqlx::query_as::<_, DailyCount>(
+            "SELECT date(timestamp, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
+             FROM transcripts WHERE timestamp >= $1
+             GROUP BY day ORDER BY day",
+        )
+        .bind(since_unix)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Delete transcripts whose timestamp is within `[start_unix, end_unix]` (inclusive), for the
+    /// "delete a date range" control. Returns the number of rows removed.
+    pub async fn delete_transcripts_between(
+        &self,
+        start_unix: i64,
+        end_unix: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let result =
+            sqlx::query("DELETE FROM transcripts WHERE timestamp >= $1 AND timestamp <= $2")
+                .bind(start_unix)
+                .bind(end_unix)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+/// One row of the usage heatmap: a local calendar day and how many dictations landed on it.
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct DailyCount {
+    /// Local date as `YYYY-MM-DD`.
+    pub day: String,
+    pub count: i64,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]

@@ -174,6 +174,22 @@ export async function clearTranscripts(): Promise<void> {
   return invoke('clear_transcripts')
 }
 
+export interface DailyCount {
+  /** Local date as `YYYY-MM-DD`. */
+  day: string
+  count: number
+}
+
+/** Per-day dictation counts over the last `days` days, for the History usage heatmap. */
+export async function transcriptDailyCounts(days = 371): Promise<DailyCount[]> {
+  return invoke('transcript_daily_counts', { days })
+}
+
+/** Delete transcripts within `[start, end]` (unix seconds, inclusive). Returns rows removed. */
+export async function deleteTranscriptsBetween(start: number, end: number): Promise<number> {
+  return invoke('delete_transcripts_between', { start, end })
+}
+
 export async function getStats(): Promise<UsageStats> {
   return invoke('get_stats')
 }

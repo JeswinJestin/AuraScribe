@@ -850,6 +850,31 @@ pub async fn clear_transcripts(state: tauri::State<'_, AppState>) -> Result<(), 
     db.clear_transcripts().await.map_err(|e| e.to_string())
 }
 
+/// Per-day dictation counts over the last `days` days, for the History usage heatmap.
+#[command]
+pub async fn transcript_daily_counts(
+    state: tauri::State<'_, AppState>,
+    days: i64,
+) -> Result<Vec<crate::db::DailyCount>, String> {
+    let since = chrono::Utc::now().timestamp() - days.max(1) * 86_400;
+    let db = state.db.lock().await;
+    db.daily_counts(since).await.map_err(|e| e.to_string())
+}
+
+/// Delete every transcript whose timestamp is within `[start, end]` (unix seconds, inclusive).
+/// Returns how many were removed so the UI can report it.
+#[command]
+pub async fn delete_transcripts_between(
+    state: tauri::State<'_, AppState>,
+    start: i64,
+    end: i64,
+) -> Result<u64, String> {
+    let db = state.db.lock().await;
+    db.delete_transcripts_between(start, end)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn get_stats(state: tauri::State<'_, AppState>) -> Result<crate::db::UsageStats, String> {
     let db = state.db.lock().await;
