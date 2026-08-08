@@ -11,9 +11,9 @@ Free, open-source, local-first voice dictation. Press a hotkey, speak, and clean
 Most people should just grab the installer — no build tools, no cloning the repo.
 
 1. Go to the [**Releases**](https://github.com/JeswinJestin/AuraScribe/releases/latest) page.
-2. Under **Assets**, download the installer — **`AuraScribe_x64-setup.exe`** (~4.6 MB).
-3. Run it (Windows SmartScreen may warn on a new unsigned app — choose *More info → Run anyway*). AuraScribe installs and opens.
-4. In **Settings → Voice model**, click **Download & Use** on `base.en` (recommended). It downloads once, then works offline forever.
+2. Under **Assets**, download the installer — **`AuraScribe_x64-setup.exe`** (~8.7 MB, bundles the Moonshine engine).
+3. Run it (Windows SmartScreen may warn on a new unsigned app — choose *More info → Run anyway*). AuraScribe installs and opens with a short first-run walkthrough.
+4. In **Settings → Voice model**, click **Download & Use** on `moonshine-base-en` (recommended). It downloads once, then works offline forever.
 5. Click into any text field, press **Ctrl+Shift+Space**, speak, press again — your words appear at the cursor.
 
 That's it. The app lives in the system tray; close the window and it keeps running. Right-click the tray icon to quit.
@@ -81,8 +81,8 @@ The first build compiles whisper.cpp from source and takes several minutes.
 
 1. AuraScribe opens its window on launch, and keeps running **in the system tray** when you
    close it — click the tray icon any time to bring it back
-2. Under **Whisper Model**, download one (`large-v3-turbo-q5_0`, ~574 MB, is recommended;
-   `base.en`, ~142 MB, is the lighter option)
+2. Under **Voice model**, download one (`moonshine-base-en`, ~286 MB, is recommended;
+   `moonshine-tiny-en`, ~110 MB, is the lighter option)
 3. Set your hotkey (default `Ctrl+Shift+Space`) and choose push-to-talk or toggle mode
 4. Place your cursor in any text field, press the hotkey, speak, press again
 
@@ -128,16 +128,30 @@ aurascribe/
 Downloaded once, then used entirely offline. Stored under your local app data directory,
 in `AuraScribe/models/`.
 
-All three run faster than real time on a CPU, so dictation never leaves you waiting.
+All of these run faster than real time on a CPU, so dictation never leaves you waiting. There
+are two engines: **Moonshine** (fast, English, the default) and **Whisper** (`tiny.en`, kept as
+the smallest fallback).
 
-| Model | Size | Language | Speed (CPU) | Role |
-|-------|------|----------|-------------|------|
-| `tiny.en` | ~75 MB | English | fastest (~0.2×) | for weak machines |
-| `base.en` | ~142 MB | English | fast (~0.5×) | **recommended** |
-| `base` | ~142 MB | Multilingual | fast (~0.6×) | other languages |
+| Model | Engine | Size | Language | Speed (CPU) | Role |
+|-------|--------|------|----------|-------------|------|
+| `moonshine-base-en` | Moonshine | ~286 MB | English | ~0.1× | **recommended** |
+| `moonshine-tiny-en` | Moonshine | ~110 MB | English | ~0.1× | lightest install |
+| `dolphin-base-multilang` | Dolphin | ~105 MB | ~40 Asian langs incl. Hindi/Tamil/Telugu/Bengali (auto-detect) | ~0.3× | Indian languages |
+| `parakeet-v3-multilingual` | Parakeet | ~671 MB | 25 European langs (auto-detect) | ~0.5× | European languages |
+| `indicconformer-ml` / `-kn` | NeMo-CTC | ~494 MB | **Malayalam** / **Kannada** (AI4Bharat IndicConformer) | ~0.6× | accurate Malayalam/Kannada |
+| `small` | Whisper | ~466 MB | **All 99 languages** incl. Malayalam, Kannada, Arabic (pick your language) | ~1.5× (slower) | widest coverage |
 
-The `large-v3` family was removed: on a CPU those models ran many times slower than real time
-and overheated the machine. They can return behind a GPU build (`build-vulkan.bat`).
+**Bring your own model.** Drop any sherpa-onnx transducer bundle (encoder/decoder/joiner + tokens)
+into `AuraScribe/models/<name>/` and it appears in the list automatically — 100% local. This is how
+**Hindi / Malayalam and other Indian languages** work, via AI4Bharat's IndicConformer: run
+[scripts/export_indicconformer_colab.ipynb](scripts/export_indicconformer_colab.ipynb) in Google
+Colab to produce the bundle, then drop it in. See [docs/INDIC-CONFORMER.md](docs/INDIC-CONFORMER.md).
+No cloud, ever.
+
+**Removed:** the Whisper `base.en`/`base`, `tiny.en`, and `moonshine-tiny-en` models — on any
+machine that runs `moonshine-base-en` (same ~0.1× speed class) they were strictly less accurate,
+so they only invited a worse result. The `large-v3` family was removed earlier for being far too
+slow on a CPU; it can return behind a GPU build (`build-vulkan.bat`).
 
 ## 🐛 Troubleshooting
 

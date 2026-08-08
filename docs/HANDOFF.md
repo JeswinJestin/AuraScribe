@@ -4,34 +4,385 @@
 > starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-06 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-08 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
-**Status — v0.4.0 built and installed locally; GitHub publish is the only step left.**
-AuraScribe works end-to-end on Windows with two speech engines. Whisper is the default;
-**Moonshine (the fast engine) now runs on Windows and ships in the v0.4.0 installer.** The
-installer bundles the sherpa-onnx + ONNX Runtime DLLs and was verified by actually installing
-it: the app at `C:\Program Files\AuraScribe` is the new UI with `moonshine-base-en` Active, no
-crash. Appearance is dark-vibrancy glass; toggles/selects/highlights are themed.
+**Status — v0.4.1, multi-engine, installed and in daily use on Windows. Malayalam AND Kannada
+VERIFIED working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text
+at the cursor, 100% local. Five model tiers now cover English, ~40 Asian languages, 25 European
+languages, and Malayalam/Kannada — all fast, offline, free. Words/Snippets apply to dictation;
+cleanup, glass default, 5-step onboarding, overlay click-to-stop all shipped.
+
+**Open-source contribution (in progress):** Malayalam model published to HuggingFace
+(`jeswinjestin/sherpa-onnx-nemo-ctc-indicconformer-malayalam`, verified: model.onnx + tokens.txt +
+`test_wavs/0.wav`). Part A ✅ and Part B ✅ (sherpa-onnx discussion #3199, "Update — solved" comment)
+done; Part C (docs PR) drafted, awaiting a maintainer reply before opening. Kannada is next (same
+process, its own HF repo — batch with the Malayalam docs PR). See `docs/CONTRIBUTING-MALAYALAM.md`
+(git-ignored: owner's private process notes).
+
+**`.gitignore` hardened this session:** excludes local agent tooling (`.agents/`, `.codex/`,
+`.github/hooks/`, `skills-lock.json`), the owner's private contribution/research notes, and the
+Colab export notebook — so only working code + public docs get pushed. Verified no secrets or
+machine-path leaks in the pushable tree.
 
 **Current state at a glance**
 
-- **Engines:** Whisper (whisper.cpp; default; multilingual; light models only) + Moonshine
-  (sherpa-onnx / ONNX Runtime; English; ~0.1× real time). The `engine.rs` facade routes each
-  request to the right engine by the selected model's `EngineKind`.
-- **Verified by running:** the INSTALLED v0.4.0 app launches the new UI and loads Moonshine with
-  no crash. Whisper dictation works.
-- **NOT yet verified (needs the owner):** a real Moonshine *voice transcript* and its on-CPU
-  speed number.
-- **Builds:** default Whisper installer = `build.bat`; Moonshine build + installer =
-  `moonshine-build.bat` (release). **Moonshine only runs in a RELEASE build** — a debug build
-  trips a harmless CRT debug-heap assertion (see Round 17).
-- **To publish v0.4.0** (owner runs; sandbox blocks network git here):
-  `git push origin master` · `git push origin v0.4.0` ·
-  `gh release create v0.4.0 --title "AuraScribe v0.4.0 — the Moonshine speed engine" --notes-file docs/RELEASE-NOTES-v0.4.0.md src-tauri/target/release/bundle/nsis/AuraScribe_0.4.0_x64-setup.exe`
-- **Next feature:** fast **multilingual** via SenseVoice on the existing sherpa-onnx engine.
+- **Speech engines** (all via the `engine.rs` `Asr` facade, routed by each model's `EngineKind`):
+  | UI name | `EngineKind` / crate | Model id(s) | Coverage | Verified? |
+  |---|---|---|---|---|
+  | AuraScribe English (+ Mini) | Moonshine (sherpa-rs) | `moonshine-base-en`, `moonshine-tiny-en` | English, ~0.1× | ✅ owner |
+  | AuraScribe Asian | Dolphin (sherpa-rs) | `dolphin-base-multilang` | ~40 Asian incl. Hindi/Tamil (auto-detect) | ✅ owner (log) |
+  | AuraScribe European | Parakeet (sherpa-rs `transducer`) | `parakeet-v3-multilingual` | 25 European (auto-detect) | ⚠️ owner should retest |
+  | AuraScribe Malayalam / Kannada | NeMo-CTC (raw `sherpa-rs-sys` FFI) | `indicconformer-ml`, `indicconformer-kn` | Malayalam / Kannada | ✅ ml owner-verified; ⚠️ kn untested |
+  | (fallback engine only) | Whisper (whisper.cpp) | — none shipped — | — | engine kept as code fallback |
+- **The whole ASR stack is `moonshine`-feature-gated** and **only runs in a RELEASE build**
+  (`moonshine-build.bat`) — a debug build trips a harmless CRT debug-heap assertion (Round 17).
+  `sherpa-rs` + `sherpa-rs-sys` provide the sherpa-onnx runtime; DLLs are bundled by the installer.
+- **Models download on demand**, packaged for sherpa-onnx at download/load time. **IndicConformer
+  needs `ensure_packaged`** (`nemo_ctc.rs`) to append ONNX metadata, or sherpa-onnx `exit()`s and
+  crashes the app — see Round 27/26b. Never ship a sherpa model load unverified.
+- **Recommendation is speed-first** (`engine.rs`) → `moonshine-base-en`. **Glass** is the default
+  appearance for fresh installs. **Language UI** shows AuraScribe names + "Powered by <engine>" +
+  full language lists (`src/lib/models.ts`).
+- **Build + publish** (owner runs; sandbox blocks the release network fetch + git):
+  1. `moonshine-build.bat` → `AuraScribe_0.4.1_x64-setup.exe` (~8.8 MB).
+  2. Install elevated, replacing `C:\Program Files\AuraScribe` (PROCESS RULE below).
+  3. `git push origin master` · `git tag v0.4.1 && git push origin v0.4.1` ·
+     `gh release create v0.4.1 --notes-file docs/RELEASE-NOTES-v0.4.1.md src-tauri/target/release/bundle/nsis/AuraScribe_0.4.1_x64-setup.exe`
+- **Open-source contribution (owner, in progress):** publish the packaged Malayalam model to
+  HuggingFace + answer sherpa-onnx discussion #3199 — full guide in `docs/CONTRIBUTING-MALAYALAM.md`.
+- **Next features (discussed, not built):** a **Linux** port (feasible — Tauri + Linux
+  text-injection à la Handy); an **"AuraScribe Universal"** auto-routing mode (heavy: several
+  engines + a language-ID router). **iOS is a redesign, not a port** — iOS bans system-wide text
+  injection / global hotkeys, so the core UX can't work as-is. Kannada needs an owner test.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### Round 28 (2026-08-08) — AuraScribe model branding; Whisper removed; contribution guide
+
+Post-Malayalam polish (owner requests):
+
+- **Removed Whisper `small`** (`asr.rs::MODELS` empty again) — "get rid of it, it's slow". The fast
+  engines now cover what matters; Whisper engine stays as code fallback only.
+- **AuraScribe-branded model names + full language lists** (`src/lib/models.ts` +
+  `SettingsView`): each model shows an AuraScribe name (e.g. **AuraScribe European**,
+  **AuraScribe Malayalam**, **AuraScribe Asian**, **AuraScribe English**), "Powered by <engine>"
+  (credits Moonshine/Parakeet/Dolphin/AI4Bharat — also good license hygiene), and the **complete
+  language list** so the user understands a model's coverage end-to-end. Removed the old raw-id +
+  "multilingual" badge. `EUROPEAN_LANGS`/`ASIAN_LANGS` live in `models.ts`. (Dictate screen's small
+  model readout still shows the raw id — minor, deferred.)
+- **`docs/CONTRIBUTING-MALAYALAM.md`** — a complete, beginner-grade walkthrough for the owner to
+  publish the packaged Malayalam model (HuggingFace upload via web UI + ready model card, answer
+  #3199, optional PR). The upload files are the app-packaged `model.onnx` + `tokens.txt` in the
+  owner's models folder (CC-BY-4.0, attribution included).
+- Verified: 43 tests pass, `cargo check --features moonshine` clean, `next build` typechecks.
+
+**Discussed, NOT built (owner said don't implement the "one model for everything" idea):** no single
+free model does all of English+European+Asian+Malayalam fast; a true "auto across all regions" would
+mean downloading several engines + a language-ID router (a heavy v2 feature). Each engine already
+auto-detects within its own region. **iOS/Linux (owner's next ask):** Linux is a feasible Tauri port
+(needs Linux text-injection via xdotool/wtype like Handy); **iOS is a redesign, not a port** — iOS
+forbids system-wide text injection/global hotkeys, so the "dictate into any app" model can't work
+as-is (would need a custom keyboard extension). sherpa-onnx itself runs on both.
+
+### Round 27 (2026-08-07) — Malayalam WORKS: auto-package IndicConformer ONNX (verified load)
+
+Solved the Round-26b crash properly. **Verified in the sandbox** with the sherpa-onnx Python API on
+the exact `trysem` Malayalam model: appending the six `metadata_props` sherpa's own exporter sets
+(`vocab_size`, `normalize_type=per_feature`, `subsampling_factor=8`,
+`model_type=EncDecHybridRNNTCTCBPEModel`, `version`, `model_author`) makes `from_nemo_ctc` **load
+cleanly (no `exit()`) and decode Malayalam** (silence → `അ`; UTF-8-confirmed).
+
+- **`nemo_ctc.rs::append_sherpa_metadata`** writes those entries as raw protobuf bytes appended to
+  `model.onnx` (metadata_props = field 14, repeated `StringStringEntryProto`; repeated fields merge
+  regardless of position, so no 493 MB parse — verified onnxruntime reads them back). `ensure_packaged`
+  runs it once (`.packaged` marker), from both download and load, so a **raw pre-existing download
+  from the crashing build is auto-repaired on next load**.
+- **Re-enabled `indicconformer-ml` / `-kn`** in the catalogue. `EngineKind::NemoCtc` path unchanged.
+- Model I/O confirmed: `audio_signal[_,80,_]` + `length` → `logprobs[_,_,5633]` (5632 vocab + blank).
+- Verified: `cargo check --features moonshine` clean; Python load+decode PASS.
+- **✅ VERIFIED BY THE OWNER (real mic test):** dictated a full Malayalam paragraph, transcribed to
+  clean, coherent Malayalam — including code-switched "Manglish" rendered sensibly. Owner reports
+  it "far more better, accurate", satisfied with the speed. **Malayalam is DONE** — fast, local,
+  accurate, no cloud. This closes the last language gap. Tooling: `scratchpad/package_and_test.py`.
+  Only `ml` + `kn` are enabled; the `trysem` repo has all 12 Indian languages if more are wanted
+  (though Dolphin already covers hi/ta/te/bn/gu/mr/pa/or/ur). Natural next step: repackage the
+  metadata-added model, upload to HF, and answer #3199 — the owner's open-source contribution.
+
+### Round 26b (2026-08-07) — CRASH FIX: raw IndicConformer ONNX aborts sherpa; catalogue cleared
+
+Round 26 shipped a load that **crashed the app**. Log proof: each `Loading NeMo-CTC model
+indicconformer-ml` line is immediately followed by a fresh `==== AuraScribe started ====` — the
+process died inside `SherpaOnnxCreateOfflineRecognizer`. Root cause: `trysem`'s ONNX is **raw
+AI4Bharat export with no sherpa-onnx metadata**, and sherpa-onnx calls **`exit()`** on such a model
+rather than returning null — so the Rust null-check can't catch it. (Download + `tokens.txt`
+generation worked; only the load aborts.)
+
+Fix: **emptied `NEMO_MODELS`** so no nemo_ctc model can be selected → crash can't be triggered. The
+engine code stays, ready for a *properly packaged* model. Lesson (re-)learned, the CLAUDE.md one:
+**do not ship a sherpa model load without verifying it actually loads** — a bad one aborts the
+process, it doesn't fail gracefully.
+
+**The real Malayalam path from here:** the IndicConformer weights DO exist (trysem, CC-BY) — the
+missing step is packaging them for sherpa-onnx (add metadata via `add-model-metadata.py`, generate
+proper tokens) and **verifying the load with the sherpa-onnx Python API before shipping**. That
+verified model can then be re-enabled in `NEMO_MODELS` (or dropped in via a future bring-your-own
+nemo_ctc discovery). Dolphin remains the working fast option for Hindi/Tamil/Telugu/Bengali/etc.
+(confirmed transcribing in the same log). Malayalam is still the one gap.
+
+### Round 26 (2026-08-07) — NeMo-CTC engine: IndicConformer Malayalam/Kannada (the real path)
+
+The owner's search turned up the breakthrough: **`trysem/indicconformer-120m-onnx`** (a copy of
+`sulabhkatiyar/...`, **CC-BY-4.0**) publishes AI4Bharat IndicConformer for **all 12 Indian
+languages as plain CTC ONNX** — one `model.onnx` (~493 MB) + `vocab.json` per language, including
+**Malayalam (`ml`) and Kannada (`kn`)**. This **bypasses the blocked NeMo→sherpa export entirely**:
+the weights already exist in ONNX, and the interface (`audio_signal [B,80,T]` + `length` → CTC
+logits) is the standard NeMo Conformer-CTC that sherpa-onnx supports.
+
+- **New `nemo_ctc.rs` engine** (`EngineKind::NemoCtc`), wired through the facade. sherpa-rs has no
+  safe wrapper for the NeMo-CTC config, so it's built with **raw `sherpa-rs-sys` FFI** (added
+  `sherpa-rs-sys` as an optional dep under the `moonshine` feature; recognizer lifecycle mirrors
+  sherpa-rs's own `dolphin.rs`). Catalogue: `indicconformer-ml`, `indicconformer-kn` (downloadable).
+- **`vocab.json` → `tokens.txt`** is generated on download (`write_tokens_from_vocab`): vocab
+  tokens in order, blank appended at id = `len(vocab)` (IndicConformer's CTC blank convention).
+- Frontend: `ipc.ts` engine union adds `nemoctc`; `SettingsView` shows the specific language per
+  model ("Malayalam only …") and treats it as no-language-selection.
+- **Verified: compiles (`cargo check --features moonshine` clean), 43 tests pass, `next build`
+  typechecks.** NOT verified end-to-end — needs the owner's 493 MB download + a Malayalam mic test.
+  **Two known risks, both visible in `aurascribe.log`:** (1) sherpa may reject the ONNX at load if
+  it lacks sherpa metadata → the load logs "could not create recognizer"; (2) if it loads but the
+  blank/token mapping is off, output will be garbled → we adjust `tokens.txt` generation. Either is
+  a tight iterate loop now that the weights exist. If it works, the owner can repackage it as a
+  proper sherpa-onnx model and contribute it to #3199 — the ideal ending.
+
+### Round 25b (2026-08-07) — Malayalam via Whisper `small`; per-model language coverage in the UI
+
+Owner: "I want Malayalam, completely, from our side" + "the UI doesn't say which languages each
+model covers." Both addressed:
+
+- **Malayalam works now (via Whisper).** Re-added Whisper **`small`** (multilingual, 466 MB) to
+  `asr.rs::MODELS` — it covers all 99 Whisper languages, including **Malayalam and Kannada** which
+  Dolphin/Parakeet/Moonshine all miss. It is slower (~1.5× CPU, so the model list warns), and it's
+  the honest bridge until a fast IndicConformer export exists. For a multilingual Whisper model the
+  Language selector stays active, so the user picks `ml`. Download URL verified live (487 MB).
+  Recommendation is unaffected (still speed-first → `moonshine-base-en`); Whisper `small` carries a
+  "slower than real time" warning by the existing rule.
+- **Per-model language coverage in Settings.** `SettingsView` now shows a plain-language line under
+  each model (`modelLanguages()`): Moonshine = English; Dolphin = Hindi/Tamil/Telugu/... *not*
+  Malayalam/Kannada; Parakeet = 25 European; Whisper `small` = all 99 incl. Malayalam. Directly
+  fixes "the user can't tell which model does which language."
+- Verified: 43 tests pass, `cargo check --features moonshine` clean, `next build` typechecks. The
+  owner confirmed the #3199 post is live. Dolphin download URLs verified reachable (a real Dolphin
+  transcript is still an owner mic test). Fast Malayalam (IndicConformer) remains the tracked goal.
+
+### Round 25 (2026-08-07) — Dolphin engine: fast local dictation in ~40 Asian languages
+
+Reading sherpa-onnx discussion #3199 (where the owner was about to post) surfaced a ready-made
+answer for Indian languages that skips the whole IndicConformer export grind: **Dolphin**
+(DataoceanAI/Tsinghua), a multilingual **CTC** model already published in sherpa-onnx format and
+exposed by `sherpa_rs::dolphin`.
+
+- **New `dolphin.rs` engine** (`EngineKind::Dolphin`), wired through the facade exactly like
+  Moonshine/Parakeet. Downloadable model `dolphin-base-multilang` = a single `model.int8.onnx`
+  (~104 MB) + `tokens.txt` from `csukuangfj/sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02`.
+  Auto-detects language (returns `.lang`). Covers **Hindi, Tamil, Telugu, Bengali, Urdu, Marathi,
+  Gujarati, Punjabi, Odia** + more — ~40 Asian languages, on CPU, light (~105 MB).
+- **Honest gap it does NOT close:** **Malayalam and Kannada** are absent from Dolphin
+  (`DataoceanAI/Dolphin/languages.md`). Those two still need IndicConformer — the owner's upstream
+  post (`docs/CONTRIB-indicconformer-sherpa-onnx.md`) targets exactly that gap.
+- Frontend: `ipc.ts` engine union adds `dolphin`; `SettingsView` treats Dolphin as auto-detect and
+  shows its real language list (Hindi/Tamil/... not the European one).
+- Verified: `cargo check --features moonshine` clean, 43 default tests pass, `next build` typechecks.
+  A real Dolphin voice transcript is an owner step (needs the download + a mic).
+
+### Round 24 (2026-08-07) — click-to-stop focus bug; overlay jitter; tiny re-added; Colab fixes
+
+Owner testing found real issues:
+
+- **Click-to-stop pasted nothing (hotkey-stop worked).** Root cause: clicking the overlay moved
+  foreground focus, and injection targets the focused window, so the paste went to the overlay
+  instead of the app being dictated into. Fixed properly: `start_recording` now captures the
+  foreground window (`system::capture_foreground_window`, stored in `AppState::target_window`),
+  and the injection task calls `system::focus_window` to restore it right before pasting. No-op on
+  the hotkey path (focus never moved), so no regression. `WS_EX_NOACTIVATE` stays as a first line
+  of defence; this is the reliable backstop.
+- **Overlay hover jitter.** The pill resized when the label changed ("Listening…" → "Stop"),
+  shifting it under the cursor. Fixed with a fixed-width pill + fixed-width label box in
+  `overlay/page.tsx` — content changes, geometry doesn't.
+- **Re-added `moonshine-tiny-en`** as the genuinely-light option (110 MB) per owner request; the
+  Whisper `tiny.en` stays removed. Recommendation is still speed-first → `moonshine-base-en`.
+- **Colab notebook fixed** (`scripts/export_indicconformer_colab.ipynb`): the export cell used a
+  non-existent `export-onnx.py`; corrected to the real **`export-onnx-transducer-non-streaming.py`**,
+  dropped the redundant quantise cell, and added a step-by-step "download the zip / unzip into
+  %LOCALAPPDATA%\AuraScribe\models" section.
+
+  **Owner ran it (Round 24b) → two more fixes:** (1) a mangled `\n` escape in cell 1 broke that
+  cell's `print`, so `LANG`/`OUT_DIR` were never defined and *every* later cell `NameError`'d —
+  regenerated ASCII-only, no escape sequences. (2) The real blocker: the sherpa-onnx script loads
+  via `nemo_asr.models.ASRModel.from_pretrained(model_name=...)`, which treats the arg as a HF repo
+  id and rejects a local path (`HFValidationError: ... './model.nemo'`). The notebook now **patches
+  that line** to `restore_from(restore_path=...)` when the arg ends in `.nemo`, so a local
+  checkpoint loads.
+
+  **Owner ran again (Round 24c):** the loader patch worked, but `restore_from` then hit
+  `KeyError: 'dir'` in `_setup_monolingual_tokenizer` — a **known** AI4Bharat issue (confirmed via
+  HF "Can't load model" discussions): their checkpoints load only with **their NeMo fork**
+  (`git clone AI4Bharat/NeMo && git checkout nemo-v2 && bash reinstall.sh`), not vanilla NeMo.
+  Notebook cell 2 updated to install the fork; loader patch switched to the concrete
+  `EncDecHybridRNNTCTCBPEModel`. **This is the genuine frontier** — the fork install is heavy and
+  the sherpa export may still need fixes; nobody has published a sherpa-onnx IndicConformer yet.
+  **Decision (owner): pause the Colab grind and file the blocker upstream as the contribution.**
+  Wrote `docs/CONTRIB-indicconformer-sherpa-onnx.md` — a ready-to-post write-up (partial recipe +
+  the `KeyError: 'dir'` blocker + focused questions) for sherpa-onnx discussion #3199 and the
+  AI4Bharat repos. The app side is complete and proven; IndicConformer/Malayalam is now tracked,
+  waiting on either a community answer or AI4Bharat publishing sherpa-onnx-ready ONNX. The Colab
+  notebook (with the fork route) stays in `scripts/` for whenever the export path is unblocked.
+
+### Round 23 (2026-08-07) — removed tiny models; speed-first recommendation; IndicConformer Colab
+
+Diagnosed the "tiny models not working" report using the new log: **all four models actually
+produced text** (`tiny.en` 37 chars, `moonshine-tiny-en` 53, `moonshine-base-en` 89, `parakeet`
+50–98/chunk at ~300 ms). So the tiny models weren't broken — just the least accurate, which felt
+like "not working" next to base/Parakeet. Owner chose to **remove them**.
+
+- **Removed `tiny.en` and `moonshine-tiny-en`.** The Whisper catalogue (`asr.rs::MODELS`) is now
+  empty (the engine stays as a fallback); the Moonshine catalogue is just `moonshine-base-en`.
+  Shipped catalogue = moonshine-base-en (English) + parakeet-v3 (European) + bring-your-own
+  transducer bundles. Default model + `page.tsx` unchanged (`moonshine-base-en`). Empty-catalogue
+  edge cases handled: `asr.rs` recommendation tests made empty-safe; `Settings::default` no longer
+  references `tiny.en`.
+- **Recommendation is now speed-first** (`engine.rs`): among models that keep up, pick the
+  *fastest* (tie-break accuracy) → `moonshine-base-en` (~0.15×) rather than the heavier
+  `parakeet-v3` (~0.5×). Matches the product's speed-first priority and the owner's.
+- **Proven: the transducer engine works end-to-end** (Parakeet transcribed on the owner's machine
+  at ~300 ms/chunk — in the log). This de-risks Indic: IndicConformer is the same engine.
+- **IndicConformer Colab notebook** (`scripts/export_indicconformer_colab.ipynb`, valid JSON,
+  generated + validated): downloads the **public** per-language `.nemo`
+  (`objectstore.e2enetworks.net/indicconformer/models/indicconformer_stt_<lang>_hybrid_rnnt_large.nemo`
+  — no HF gate), runs sherpa-onnx's hybrid NeMo→onnx exporter, packages encoder/decoder/joiner +
+  tokens for drop-in. **Best-effort, untested** (can't run NeMo in the sandbox; AI4Bharat needs a
+  NeMo fork; the hybrid export isn't a solved community path) — honest caveats are in the notebook
+  and `docs/INDIC-CONFORMER.md`. Once a bundle is produced it drops into the models folder and is
+  auto-discovered by the transducer engine (Round 21).
+
+### Round 22 (2026-08-07) — observability: file logging + transcription diagnostics
+
+The owner reinstalled v0.4.1, downloaded **parakeet-v3-multilingual** (all 4 files present, verified
+on disk), and reported **no transcription** and that **"processing" wasn't visible**. Diagnosis was
+impossible because **logs went only to stdout** — and a release build has no console
+(`windows_subsystem = "windows"`), so `aurascribe.log` never existed. Fixes this round:
+
+- **Persistent file logging** (`main.rs`, no new dependency): a custom `MakeWriter` tees `tracing`
+  to `%LOCALAPPDATA%\AuraScribe\aurascribe.log` (truncated when >5 MB, session header on start),
+  in addition to stdout. This is what makes "why isn't the model transcribing?" answerable — the
+  file is what the owner can read/share. `get_log_file_path` already pointed here.
+- **Transcription diagnostics**: `parakeet.rs`/`moonshine.rs` now log each chunk's sample count,
+  output length, and time; the transducer logs model-load start/finish and a loud WARN when it
+  returns empty text. So the log now says whether the model loaded, how long inference took, and
+  whether it produced anything.
+- **Processing indicator is NOT broken.** Verified by previewing `/overlay` with a forced
+  `is_processing` state: it renders "Processing…" with the spinner. `DictateView` also shows
+  Processing. The likely perception issue: with live chunking on the fast engines, most work
+  happens *during* recording, so the post-stop "Processing" phase is brief — and if Parakeet was
+  fed **Malayalam (which it does not support — it's 25 European languages)** it would return
+  empty, flashing straight to "No speech detected." The new log will confirm which case it is.
+
+**Owner step:** reinstall this build, dictate once (in English to test Parakeet, since it can't do
+Malayalam), then read `%LOCALAPPDATA%\AuraScribe\aurascribe.log` — it will show the model load and
+the transcribe result. Malayalam still needs the IndicConformer bundle (Round 21 / INDIC-CONFORMER.md).
+
+**Follow-up (same round): engine-aware Language control.** The Settings "Audio and language"
+selector was misleading — Parakeet auto-detects and the backend *ignores* the manual language
+choice for it, yet the UI still offered a dropdown (incl. Malayalam, which Parakeet can't do).
+`SettingsView` now derives `langMode` from the loaded model's engine: **auto** (Parakeet / custom
+transducer — shows "Detected automatically" with the 25 languages as a tooltip), **english**
+(Moonshine / tiny.en — shows "English"), or **manual** (a multilingual Whisper model — keeps the
+dropdown). Backend behaviour was already correct (Parakeet's `transcribe` ignores the language
+hint); this just makes the UI honest about it.
+
+### Round 21 (2026-08-07) — overlay click-to-stop; fast multilingual (Parakeet + bring-your-own)
+
+Two features, all verified by `cargo test` (45 pass) + `cargo check` (default and `--features
+moonshine`) + `next build`/typecheck. Runtime click behaviour and any *voice* transcript remain
+owner steps (need the release app + a mic).
+
+1. **Overlay click-to-stop.** Clicking the "Listening…" pill stops dictation (previously only the
+   hotkey could). The subtlety that makes this safe: on Windows a click would normally make the
+   overlay the foreground window, and since injection pastes into whatever is focused, the
+   transcript would land *in the overlay*. Fixed by marking the overlay `WS_EX_NOACTIVATE`
+   (`overlay.rs::make_non_activating`) so it receives the click without ever stealing focus. The
+   overlay page (`src/app/overlay/page.tsx`) shows a stop affordance on hover and calls
+   `stop_recording`.
+
+2. **Fast multilingual — the transducer engine (`parakeet.rs`).** Added on the sherpa-onnx engine
+   we already link. Two things it serves:
+   - **Parakeet-TDT-0.6b-v3** (built-in, downloadable from `csukuangfj/sherpa-onnx-nemo-parakeet-
+     tdt-0.6b-v3-int8`): 25 European languages, auto language detection, ≥ Whisper large-v3
+     accuracy, ~0.5× CPU. Loaded via sherpa-rs's `transducer::TransducerRecognizer`.
+   - **Bring-your-own transducer bundles:** `parakeet.rs::custom_models` auto-discovers any
+     sherpa-onnx transducer bundle (encoder/decoder/joiner + tokens.txt, int8 or full) dropped into
+     the models dir, and lists it as a selectable multilingual model. `engine_of` became an
+     instance method so the facade can route these disk-discovered ids to the transducer engine.
+     Detection is unit-tested (and proven not to mis-detect a Moonshine bundle, which has no joiner).
+
+   **This is the answer to Hindi/Malayalam** without a cloud call or a heavyweight Python server.
+   The user researched Soniox/Speechyou (cloud — rejected, they violate the local-first
+   non-negotiable) and VEXYL-STT (local but a ~3 GB Python/PyTorch server — too heavy to embed).
+   Decision (owner, this round): run AI4Bharat **IndicConformer** natively in our engine instead.
+   The model side is a one-time NeMo→sherpa-onnx export documented in **`docs/INDIC-CONFORMER.md`**;
+   once exported and dropped in the models folder, it's auto-discovered and works. **Not yet
+   verified end-to-end** — the export needs a Python/NeMo env + the gated model + a real-audio
+   benchmark, which the sandbox can't do. Speed ceiling is honest: faster-than-real-time on a good
+   CPU, not Moonshine-instant (no free model is, for these languages).
+
+   SenseVoice (CJK) is reachable the same way via `sherpa_rs::sense_voice` if wanted later; it does
+   not cover Malayalam so it was not added.
+
+### Round 20 (2026-08-07) — v0.4.1: Moonshine-first, Words/Snippets wired, onboarding, Glass default
+
+Six changes this round, all verified by `cargo test` / `cargo check` (default **and**
+`--features moonshine`), a clean `next build` + typecheck, and a browser preview of the new UI.
+A real Moonshine *voice* transcript and the release install remain owner steps (Moonshine only
+runs in a release build; installing needs the UAC prompt).
+
+1. **Model catalogue trimmed; Moonshine is the default.** Removed Whisper `base.en` and `base`
+   (multilingual) from `asr.rs::MODELS` — `moonshine-tiny-en` is faster *and* more accurate on
+   English, so a Whisper `base` model was strictly worse. Kept `tiny.en` as the smallest
+   fallback. The **Recommended** badge is now computed in `engine.rs::list_available_models`
+   **across both engines** (was per-engine, which would show two badges); it picks
+   `moonshine-base-en`. Default `whisper_model` is now `moonshine-base-en` (feature-gated: a
+   Whisper-only build falls back to `tiny.en`). Multilingual is intentionally deferred to the
+   next SenseVoice/Parakeet engine rather than kept on slow Whisper `base`.
+
+2. **Words + Snippets actually apply now (was a stored-but-dead feature).** `stop_recording`
+   previously did transcribe → `cleanup::clean` → inject, with **no** dictionary/snippet step —
+   the Words and Snippets screens saved entries that never touched dictation. New module
+   `expand.rs` applies the personal dictionary (whole-word, optional case-sensitive) then snippet
+   expansions (whole-phrase, case-insensitive, longest-trigger-first, inserted verbatim), loaded
+   from the DB once per dictation and run after cleanup, before injection. Runs even when cleanup
+   is off. 8 unit tests. This is the classic "looks done, does nothing" trap the docs warn about.
+
+3. **First-run onboarding.** New `Onboarding.tsx` — a 5-step walkthrough (welcome · pick a model ·
+   the hotkey · Cleanup/Words/Snippets · appearance) shown over the app on a fresh install, with
+   Skip / Back / Next and a final "Start dictating". Gated on a new `onboarded` setting.
+
+4. **Glass is the default appearance.** Fresh installs open in Glass; returning users keep their
+   theme. **How first-run is detected:** `Database::new` captures `is_fresh = !db_path.exists()`
+   *before* creating the file; on a fresh DB it runs `UPDATE settings SET theme='glass',
+   onboarded=0`. Migration `006_onboarding.sql` adds `onboarded` with **DEFAULT 1** so existing
+   installs are backfilled to "already onboarded" and never nagged or re-themed. (SQL alone can't
+   tell a fresh DB from an old one — every migration runs at first launch — hence the Rust check.)
+
+5. **Cleanup verified.** All 13 `cleanup` tests pass; filler removal works and stays behind its
+   toggle. No change needed beyond confirming it.
+
+6. **Version + docs.** Bumped 0.4.0 → **0.4.1** across `package.json` / `Cargo.toml` /
+   `tauri.conf.json`, fixed the hardcoded "v1.0" in `WidgetRail.tsx`, added
+   `docs/RELEASE-NOTES-v0.4.1.md`, and refreshed the README model table + first-run steps and the
+   EXPLAINER pipeline/model sections. (Rationale for the bump is in the at-a-glance list above.)
+
+**New wire fields:** `Settings.onboarded` (Rust `commands.rs` + `db.rs` `SettingsRow` +
+`src/lib/ipc.ts`). The `settings_round_trip` wire-format test now asserts it.
 
 ### Round 19 (2026-08-06) — ROOT CAUSE of the recurring "old UI" (process fix)
 

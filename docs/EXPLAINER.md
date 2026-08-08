@@ -90,8 +90,9 @@ them transparently based on which model you pick. This is the most technically i
 - **Strengths:** very robust, **multilingual**, handles accents and noise well.
 - **Weakness on a CPU:** it processes audio in **fixed 30-second windows**, so bigger, more
   accurate Whisper models get *slow* on a laptop CPU (a large model can take minutes per
-  sentence). That's why AuraScribe only ships the light Whisper models (`tiny.en`, `base.en`,
-  `base`).
+  sentence). As of v0.4.1 AuraScribe keeps only **`tiny.en`** from Whisper as the smallest
+  fallback — Moonshine is both faster and more accurate on English, so the Whisper `base` models
+  were dropped.
 
 ### 4b. Moonshine (the fast, advanced engine)
 
@@ -142,9 +143,12 @@ Here is the exact journey from your voice to text on screen:
    **chunks while you're still talking**, so the result is nearly ready the moment you stop.
 6. **Cleanup.** A local text pass fixes capitalization/punctuation and drops filler artifacts.
    This is plain local code — *not* a cloud LLM.
-7. **Injection.** The text is typed at your cursor using OS-level input APIs, so it appears in
+7. **Your Words & Snippets.** The cleaned text is run through your personal dictionary (spoken-
+   form corrections like “kubernetes” → “Kubernetes”) and your snippets (say “my email”, get your
+   full address). Also plain local text processing.
+8. **Injection.** The text is typed at your cursor using OS-level input APIs, so it appears in
    whatever app you're using.
-8. **History.** The transcript is saved to the local SQLite database so you can find it later.
+9. **History.** The transcript is saved to the local SQLite database so you can find it later.
 
 Every step runs on your machine. Nothing is uploaded at any point.
 
