@@ -84,12 +84,7 @@ impl Asr {
     ///
     /// Recommendation is decided **here**, across all engines, not inside either one — otherwise
     /// each engine would badge its own best and the list would show two "Recommended" chips.
-    ///
-    /// The rule is **speed-first**: among models that keep up with speech (`realtime_factor <=
-    /// 1.0`), recommend the *fastest*, tie-broken by higher accuracy. This matches the product's
-    /// speed-first priority and lands on `moonshine-base-en` (~0.15× English) rather than the
-    /// heavier, slower `parakeet-v3` (~0.5×, 671 MB) — Parakeet stays available for when you
-    /// actually need a European language, but it is not the default anyone is nudged toward.
+    /// See [`elect_recommended`] for the rule.
     pub fn list_available_models(&self) -> Vec<ModelInfo> {
         // `mut` is only used when the moonshine extend below is compiled in.
         #[cfg_attr(not(feature = "moonshine"), allow(unused_mut))]
@@ -103,23 +98,7 @@ impl Asr {
         #[cfg(feature = "moonshine")]
         models.extend(self.nemo_ctc.list_available_models());
 
-        for m in &mut models {
-            m.recommended = false;
-        }
-        if let Some(best) = models
-            .iter()
-            .filter(|m| m.realtime_factor <= 1.0)
-            .min_by(|a, b| {
-                a.realtime_factor
-                    .total_cmp(&b.realtime_factor)
-                    .then(b.accuracy.cmp(&a.accuracy))
-            })
-            .map(|m| m.id.clone())
-        {
-            if let Some(m) = models.iter_mut().find(|m| m.id == best) {
-                m.recommended = true;
-            }
-        }
+        elect_recommended(&mut models);
         models
     }
 
@@ -234,5 +213,103 @@ impl Asr {
         } else {
             Ok(())
         }
+    }
+}
+
+/// Set the single `recommended` model across the whole catalogue.
+///
+/// The rule is **accuracy-first**: among models that keep up with speech (`realtime_factor <=
+/// 1.0`), recommend the **most accurate**, breaking ties toward the **fastest**. Everything below
+/// the real-time line is excluded so the badge never points at a model that can't keep pace.
+///
+/// With the real catalogue this elects **`moonshine-base-en`** ("AuraScribe English", accuracy 4,
+/// ~0.15×): more accurate than `moonshine-tiny-en` ("English Mini", accuracy 3), and faster than
+/// the equally-accurate but far heavier `parakeet-v3` (~0.5×, 671 MB) and `indicconformer`
+/// (~0.6×). The earlier rule was *speed-first*, which elected the fractionally-faster Mini — but a
+/// 0.10× vs 0.15× gap is imperceptible, so accuracy is what should decide the English default.
+fn elect_recommended(models: &mut [ModelInfo]) {
+    for m in models.iter_mut() {
+        m.recommended = false;
+    }
+    let best = models
+        .iter()
+        .filter(|m| m.realtime_factor <= 1.0)
+        .max_by(|a, b| {
+            a.accuracy
+                .cmp(&b.accuracy)
+                .then_with(|| b.realtime_factor.total_cmp(&a.realtime_factor))
+        })
+        .map(|m| m.id.clone());
+    if let Some(best) = best {
+        if let Some(m) = models.iter_mut().find(|m| m.id == best) {
+            m.recommended = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::asr::{EngineKind, ModelInfo};
+
+    fn model(id: &str, accuracy: u8, realtime_factor: f32) -> ModelInfo {
+        ModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            engine: EngineKind::Moonshine,
+            size_mb: 0,
+            multilingual: false,
+            speed: 1,
+            accuracy,
+            recommended: false,
+            downloaded: false,
+            path: None,
+            realtime_factor,
+            warning: None,
+        }
+    }
+
+    /// The recommendation must land on the most accurate real-time model, not the fastest. With the
+    /// real catalogue values that is `moonshine-base-en` (accuracy 4) — never `moonshine-tiny-en`
+    /// (accuracy 3) despite Mini being fractionally faster, and never the equally-accurate but
+    /// heavier Parakeet or IndicConformer.
+    #[test]
+    fn recommends_most_accurate_realtime_model_not_the_fastest() {
+        let mut models = vec![
+            model("moonshine-tiny-en", 3, 0.10),
+            model("moonshine-base-en", 4, 0.15),
+            model("parakeet-v3-multilingual", 4, 0.5),
+            model("indicconformer-ml", 4, 0.6),
+            model("whisper-large", 5, 3.0), // too slow — excluded despite top accuracy
+        ];
+        elect_recommended(&mut models);
+        let recommended: Vec<&str> = models
+            .iter()
+            .filter(|m| m.recommended)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(
+            recommended,
+            ["moonshine-base-en"],
+            "exactly AuraScribe English (moonshine-base-en) should be recommended"
+        );
+    }
+
+    /// A model slower than speech is never recommended, even if it is the most accurate one.
+    #[test]
+    fn never_recommends_a_model_that_cannot_keep_up() {
+        let mut models = vec![
+            model("slow-but-accurate", 5, 2.0),
+            model("fast-enough", 4, 0.2),
+        ];
+        elect_recommended(&mut models);
+        assert!(
+            models.iter().find(|m| m.id == "fast-enough").unwrap().recommended,
+            "the real-time model should be recommended"
+        );
+        assert!(
+            !models.iter().find(|m| m.id == "slow-but-accurate").unwrap().recommended,
+            "a model slower than real time must never be recommended"
+        );
     }
 }
