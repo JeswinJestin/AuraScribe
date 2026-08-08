@@ -62,6 +62,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [tauri, setTauri] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const [historyReloadToken, setHistoryReloadToken] = useState(0)
 
   useEffect(() => {
     let offStatus: (() => void) | null = null
@@ -236,7 +237,7 @@ export default function App() {
                   onGoToSettings={() => setView('settings')}
                 />
               )}
-              {view === 'history' && <HistoryView />}
+              {view === 'history' && <HistoryView reloadToken={historyReloadToken} />}
               {view === 'dictionary' && <DictionaryView />}
               {view === 'snippets' && <SnippetsView />}
               {view === 'insights' && <InsightsView />}
@@ -247,7 +248,12 @@ export default function App() {
 
             {/* Contextual right rail — changes with the active tab. Hidden on narrow widths. */}
             <div className="hidden w-[250px] flex-shrink-0 overflow-y-auto overflow-x-hidden xl:block">
-              <WidgetRail view={view} status={status} settings={settings} />
+              <WidgetRail
+                view={view}
+                status={status}
+                settings={settings}
+                onHistoryChanged={() => setHistoryReloadToken((t) => t + 1)}
+              />
             </div>
           </div>
         </div>

@@ -318,7 +318,7 @@ export function Select({
               onMouseEnter={() => setActiveIndex(idx)}
               onClick={() => commit(idx)}
               className={`flex cursor-pointer items-center justify-between gap-2 rounded-[7px] px-2.5 py-2 text-sm ${
-                isActive ? 'bg-accent' : ''
+                isActive ? 'select-option-active' : ''
               }`}
             >
               <span className="truncate">{opt.label}</span>

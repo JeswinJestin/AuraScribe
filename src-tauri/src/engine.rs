@@ -218,22 +218,29 @@ impl Asr {
 
 /// Set the single `recommended` model across the whole catalogue.
 ///
-/// The rule is **accuracy-first**: among models that keep up with speech (`realtime_factor <=
-/// 1.0`), recommend the **most accurate**, breaking ties toward the **fastest**. Everything below
-/// the real-time line is excluded so the badge never points at a model that can't keep pace.
+/// The rule is **English-first**: this is an English dictation product, so the default badge
+/// points at the best *English* option and lets multilingual models be a deliberate, informed
+/// choice. Among English models that keep up with speech (`realtime_factor <= 1.0`), recommend
+/// the **most accurate**, breaking ties toward the **fastest**. Multilingual models are only
+/// considered when no English model can keep pace. Everything below the real-time line is
+/// excluded so the badge never points at a model that can't keep up.
 ///
 /// With the real catalogue this elects **`moonshine-base-en`** ("AuraScribe English", accuracy 4,
-/// ~0.15×): more accurate than `moonshine-tiny-en` ("English Mini", accuracy 3), and faster than
-/// the equally-accurate but far heavier `parakeet-v3` (~0.5×, 671 MB) and `indicconformer`
-/// (~0.6×). The earlier rule was *speed-first*, which elected the fractionally-faster Mini — but a
-/// 0.10× vs 0.15× gap is imperceptible, so accuracy is what should decide the English default.
+/// ~0.15×): more accurate than `moonshine-tiny-en` ("English Mini", accuracy 3) and faster than
+/// the equally-accurate multilingual `parakeet-v3` (~0.5×, 671 MB) and `indicconformer` (~0.6×).
+/// The rule is why the badge never lands on the multilingual "AuraScribe European" (Parakeet),
+/// even though its headline accuracy (5) is higher — Parakeet is the multilingual choice, not the
+/// English default. The earlier rule was *accuracy-first over all models*, which elected the
+/// multilingual Parakeet; the owner asked for AuraScribe English to be the recommendation.
 fn elect_recommended(models: &mut [ModelInfo]) {
     for m in models.iter_mut() {
         m.recommended = false;
     }
-    let best = models
+    let realtime: Vec<&ModelInfo> = models.iter().filter(|m| m.realtime_factor <= 1.0).collect();
+    let english: Vec<&ModelInfo> = realtime.iter().copied().filter(|m| !m.multilingual).collect();
+    let candidates = if english.is_empty() { realtime } else { english };
+    let best = candidates
         .iter()
-        .filter(|m| m.realtime_factor <= 1.0)
         .max_by(|a, b| {
             a.accuracy
                 .cmp(&b.accuracy)
@@ -253,12 +260,16 @@ mod tests {
     use crate::asr::{EngineKind, ModelInfo};
 
     fn model(id: &str, accuracy: u8, realtime_factor: f32) -> ModelInfo {
+        model_with_langs(id, accuracy, realtime_factor, false)
+    }
+
+    fn model_with_langs(id: &str, accuracy: u8, realtime_factor: f32, multilingual: bool) -> ModelInfo {
         ModelInfo {
             id: id.to_string(),
             name: id.to_string(),
             engine: EngineKind::Moonshine,
             size_mb: 0,
-            multilingual: false,
+            multilingual,
             speed: 1,
             accuracy,
             recommended: false,
@@ -269,17 +280,19 @@ mod tests {
         }
     }
 
-    /// The recommendation must land on the most accurate real-time model, not the fastest. With the
+    /// The recommendation must land on the most accurate real-time **English** model. With the
     /// real catalogue values that is `moonshine-base-en` (accuracy 4) — never `moonshine-tiny-en`
-    /// (accuracy 3) despite Mini being fractionally faster, and never the equally-accurate but
-    /// heavier Parakeet or IndicConformer.
+    /// (accuracy 3) despite Mini being fractionally faster, and never the multilingual Parakeet or
+    /// IndicConformer, even though Parakeet's headline accuracy (5) is higher. The English-first
+    /// rule is why the badge sits on AuraScribe English, not the multilingual "AuraScribe
+    /// European".
     #[test]
-    fn recommends_most_accurate_realtime_model_not_the_fastest() {
+    fn recommends_most_accurate_realtime_english_model_not_any_multilingual() {
         let mut models = vec![
             model("moonshine-tiny-en", 3, 0.10),
             model("moonshine-base-en", 4, 0.15),
-            model("parakeet-v3-multilingual", 4, 0.5),
-            model("indicconformer-ml", 4, 0.6),
+            model_with_langs("parakeet-v3-multilingual", 5, 0.5, true),
+            model_with_langs("indicconformer-ml", 4, 0.6, true),
             model("whisper-large", 5, 3.0), // too slow — excluded despite top accuracy
         ];
         elect_recommended(&mut models);
@@ -292,6 +305,27 @@ mod tests {
             recommended,
             ["moonshine-base-en"],
             "exactly AuraScribe English (moonshine-base-en) should be recommended"
+        );
+    }
+
+    /// With no English real-time model in the list, the rule relaxes to the most accurate
+    /// real-time model overall (a multilingual one is fine then).
+    #[test]
+    fn recommends_multilingual_when_no_english_model_keeps_up() {
+        let mut models = vec![
+            model_with_langs("parakeet-v3-multilingual", 5, 0.5, true),
+            model_with_langs("indicconformer-ml", 4, 0.6, true),
+        ];
+        elect_recommended(&mut models);
+        let recommended: Vec<&str> = models
+            .iter()
+            .filter(|m| m.recommended)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(
+            recommended,
+            ["parakeet-v3-multilingual"],
+            "the most accurate multilingual real-time model is the fallback"
         );
     }
 

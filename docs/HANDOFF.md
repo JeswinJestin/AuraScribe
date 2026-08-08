@@ -73,6 +73,43 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### Round 30 (2026-08-08) — owner feedback round 2 on the v1.0.0 build
+
+Owner inspected the round-29 build and flagged four things; all fixed and rebuilt:
+
+- **Recommended badge sat on "AuraScribe European", not English.** The old rule was
+  *accuracy-first over all models*, and the real catalogue gives `parakeet-v3-multilingual`
+  accuracy 5 — so the badge landed on the multilingual Parakeet. `elect_recommended`
+  (`engine.rs`) is now **English-first**: among models that keep up with speech it prefers
+  non-multilingual (English) models, then most accurate then fastest — electing
+  **`moonshine-base-en` (AuraScribe English)** and keeping the badge off the multilingual
+  "European"/"Asian" models. Tests updated to the real catalogue values (parakeet accuracy 5,
+  multilingual) plus a fallback test for when no English model keeps up.
+- **Single-key hotkeys were accepted (a bare `C` would hijack dictation while typing).**
+  `HotkeyCapture` (SettingsView) now **rejects any capture without a modifier** — a lone
+  letter/number/space/F-key shows a hint and is ignored; you must press a modifier + a key
+  (Ctrl/Alt/Shift + key). The default remains `Ctrl+Shift+Space`.
+- **Heatmap top labels were unreadable.** Month labels were one-truncated-letter-per-cell
+  ("J", "F", "M", …) that read as gibberish. Rewrote the label pass: each month now gets one
+  **full short month name** ("Jan"…"Dec") spanning its own columns, exactly like GitHub's year
+  graph, and the confusing day-letter column on the left was removed.
+- **"Delete a date range" must live in the right-hand rail**, under the "Your data"/"Tip"
+  cards, in red. Moved it out of the History tab entirely into the `WidgetRail` history card —
+  a new `danger` card ("Delete a date range") with a red outline, red header, red border button
+  and a two-step confirm. The rail bumps `HistoryView` via a `reloadToken` prop so the list and
+  heatmap refresh after a range delete. History's own right-hand column is gone (full-width
+  layout).
+- **Dropdown option highlight now matches the sidebar.** Added `.select-option-active` (used by
+  the custom `Select`) plus `.glass-bg .select-popover li:hover` rules so the hover/active row
+  uses the same frosted-white hover and indigo active tone as the sidebar nav items, instead of
+  the muddy warm-charcoal `bg-accent`.
+- Verified: **48 tests pass** (was 47 — one new fallback test), `tsc --noEmit` clean, and the
+  installer rebuilt with `--features moonshine --config src-tauri/tauri.moonshine.conf.json`
+  (`AuraScribe_1.0.0_x64-setup.exe`, ~8.8 MB). **Owner must reinstall** (PROCESS RULE: one
+  install) and re-check: Recommended badge on AuraScribe English, hotkey capture rejecting a
+  bare key, the heatmap month labels, the red delete-range card in the right rail, and the
+  dropdown hover tone in Glass.
+
 ### Round 29 (2026-08-08) — owner-verified UI fixes on the v1.0.0 build
 
 Owner ran the v1.0.0 installer and flagged real defects; all fixed and rebuilt:

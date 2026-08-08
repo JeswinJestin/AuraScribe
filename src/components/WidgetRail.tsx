@@ -1,28 +1,136 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import { Trash2, Loader2 } from 'lucide-react'
 import type { Settings, Status } from '@/lib/ipc'
+import * as ipc from '@/lib/ipc'
 import type { View } from '@/components/Sidebar'
 
 /** One card in the contextual rail. */
 function Widget({
   title,
   accent,
+  danger,
   children,
 }: {
   title: string
   accent?: boolean
+  danger?: boolean
   children: ReactNode
 }) {
   return (
-    <div className={accent ? 'panel-accent p-[18px]' : 'rounded-2xl border bg-card p-[18px]'}>
+    <div
+      className={
+        danger
+          ? 'rounded-2xl border border-destructive/30 bg-destructive/5 p-[18px]'
+          : accent
+          ? 'panel-accent p-[18px]'
+          : 'rounded-2xl border bg-card p-[18px]'
+      }
+    >
       <div
         className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em]"
-        style={{ color: 'hsl(var(--muted-foreground))' }}
+        style={{
+          color: danger ? 'hsl(var(--destructive))' : 'hsl(var(--muted-foreground))',
+        }}
       >
         {title}
       </div>
       {children}
+    </div>
+  )
+}
+
+/** Delete every dictation in a chosen date range. Two-step, so it can't fire by accident. */
+function RangeDelete({ onDeleted }: { onDeleted: () => void }) {
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  const valid = from !== '' && to !== '' && from <= to
+
+  const runDelete = async () => {
+    setBusy(true)
+    setNote(null)
+    try {
+      const start = Math.floor(new Date(`${from}T00:00:00`).getTime() / 1000)
+      const end = Math.floor(new Date(`${to}T23:59:59`).getTime() / 1000)
+      const removed = await ipc.deleteTranscriptsBetween(start, end)
+      setNote(`Deleted ${removed} ${removed === 1 ? 'entry' : 'entries'}.`)
+      setConfirming(false)
+      onDeleted()
+    } catch (e) {
+      setNote(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <p className="text-[12px] leading-snug" style={{ color: 'hsl(var(--foreground) / 0.72)' }}>
+        Erase the dictations saved between two dates and free up space on this machine.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] text-muted-foreground">From</span>
+          <input
+            type="date"
+            value={from}
+            max={to || undefined}
+            onChange={(e) => {
+              setFrom(e.target.value)
+              setConfirming(false)
+            }}
+            className="input w-full"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] text-muted-foreground">To</span>
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={(e) => {
+              setTo(e.target.value)
+              setConfirming(false)
+            }}
+            className="input w-full"
+          />
+        </label>
+      </div>
+
+      {confirming ? (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={runDelete}
+            disabled={busy}
+            className="flex-1 rounded-lg bg-destructive px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+          >
+            {busy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Trash2 className="mr-1 h-3 w-3" />}
+            Confirm delete
+          </button>
+          <button
+            onClick={() => setConfirming(false)}
+            disabled={busy}
+            className="rounded-lg border px-3 py-1.5 text-xs hover:bg-accent"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirming(true)}
+          disabled={!valid}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Trash2 className="h-3 w-3" />
+          Delete a time range
+        </button>
+      )}
+      {note && <p className="text-[11px] text-muted-foreground">{note}</p>}
     </div>
   )
 }
@@ -55,10 +163,12 @@ export function WidgetRail({
   view,
   status,
   settings,
+  onHistoryChanged,
 }: {
   view: View
   status: Status
   settings: Settings
+  onHistoryChanged?: () => void
 }) {
   const model = status.loaded_model ?? settings.whisper_model
   const hotkey = settings.hotkey.replace(/\+/g, ' + ')
@@ -93,6 +203,9 @@ export function WidgetRail({
         </Widget>
         <Widget title="Tip">
           <Body>Use Words to fix recurring mis-hears so they stop showing up here.</Body>
+        </Widget>
+        <Widget title="Delete a date range" danger>
+          <RangeDelete onDeleted={onHistoryChanged ?? (() => {})} />
         </Widget>
       </>
     ),

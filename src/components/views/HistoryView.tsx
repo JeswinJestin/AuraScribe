@@ -9,7 +9,6 @@ import { PageHeader, EmptyState, ErrorNote } from '@/components/ui'
 const PAGE_SIZE = 60
 const HEATMAP_WEEKS = 53 // a full year of usage, like GitHub's contribution graph
 const LEVEL_OPACITY = [0, 0.28, 0.5, 0.72, 1]
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 /** Local `YYYY-MM-DD` — must match the DB's `date(timestamp, 'unixepoch', 'localtime')`. */
 function dayKey(d: Date): string {
@@ -83,7 +82,7 @@ function UsageHeatmap({ counts }: { counts: DailyCount[] }) {
     return () => ro.disconnect()
   }, [])
 
-  const { weeks, monthMarks } = useMemo(() => {
+  const { weeks, monthLabels } = useMemo(() => {
     const byDay = new Map<string, number>()
     for (const c of counts) byDay.set(c.day, c.count)
 
@@ -94,25 +93,45 @@ function UsageHeatmap({ counts }: { counts: DailyCount[] }) {
     start.setDate(start.getDate() - (HEATMAP_WEEKS * 7 - 1))
 
     const cols: { key: string; date: Date; count: number }[][] = []
-    const marks: (string | null)[] = []
+    // One label per month, spanning that month's columns — so "Jan" is written in full instead of
+    // a compressed letter per cell (GitHub draws the same way).
+    const labels: { text: string; colStart: number; span: number }[] = []
     const cur = new Date(start)
     for (let w = 0; w < HEATMAP_WEEKS; w++) {
       const col: { key: string; date: Date; count: number }[] = []
-      let label: string | null = null
       for (let d = 0; d < 7; d++) {
         const key = dayKey(cur)
         col.push({ key, date: new Date(cur), count: byDay.get(key) ?? 0 })
-        // Label the week if the day before this one was the first day of a month, or if this is
-        // the very first week shown.
-        if (cur.getDate() <= 7 && label === null) {
-          label = cur.toLocaleDateString(undefined, { month: 'short' })
-        }
         cur.setDate(cur.getDate() + 1)
       }
       cols.push(col)
-      marks.push(label)
     }
-    return { weeks: cols, monthMarks: marks }
+    // Group weeks by the month of their first day, so each month gets a contiguous label span —
+    // every month gets one readable label, like GitHub's own year graph.
+    const monthOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1).getTime()
+    let runStart = -1
+    let runMonth = -1
+    for (let w = 0; w < HEATMAP_WEEKS; w++) {
+      const month = monthOf(cols[w][0].date)
+      if (runStart === -1) {
+        runStart = w
+        runMonth = month
+      } else if (month !== runMonth) {
+        labels.push({
+          text: new Date(runMonth).toLocaleDateString(undefined, { month: 'short' }),
+          colStart: runStart,
+          span: w - runStart,
+        })
+        runStart = w
+        runMonth = month
+      }
+    }
+    labels.push({
+      text: new Date(runMonth).toLocaleDateString(undefined, { month: 'short' }),
+      colStart: runStart,
+      span: HEATMAP_WEEKS - runStart,
+    })
+    return { weeks: cols, monthLabels: labels }
   }, [counts])
 
   const today = startOfDay(new Date())
@@ -141,163 +160,59 @@ function UsageHeatmap({ counts }: { counts: DailyCount[] }) {
       </div>
 
       <div ref={wrapRef} className="w-full">
-        {/* Month labels across the top. */}
-        <div className="mb-1 flex" style={{ gap, marginLeft: 15 }}>
-          {monthMarks.map((label, wi) => (
+        {/* Month labels across the top — one readable label per month. */}
+        <div className="relative mb-1 h-3.5" style={{ marginLeft: 6 }}>
+          {monthLabels.map((l, i) => (
             <span
-              key={wi}
-              className="truncate text-[9px] leading-[10px] text-muted-foreground"
-              style={{ width: cellSize, textAlign: 'left' }}
+              key={i}
+              className="absolute top-0 whitespace-nowrap text-[9px] leading-[10px] text-muted-foreground"
+              style={{
+                left: l.colStart * (cellSize + gap),
+                width: Math.max(1, l.span) * (cellSize + gap),
+                overflow: 'hidden',
+              }}
             >
-              {label ?? ''}
+              {l.text}
             </span>
           ))}
         </div>
 
-        <div className="mt-1 flex w-full" style={{ gap }}>
-          {/* Day-of-week column on the left, like GitHub. */}
-          <div
-            className="flex flex-col text-[8px] leading-[9px] text-muted-foreground"
-            style={{ gap }}
-          >
-            <span style={{ width: 12, height: cellSize, lineHeight: `${cellSize}px` }}>Su</span>
-            <span style={{ width: 12, height: cellSize }} />
-            <span style={{ width: 12, height: cellSize, lineHeight: `${cellSize}px` }}>Tu</span>
-            <span style={{ width: 12, height: cellSize }} />
-            <span style={{ width: 12, height: cellSize, lineHeight: `${cellSize}px` }}>Th</span>
-            <span style={{ width: 12, height: cellSize }} />
-            <span style={{ width: 12, height: cellSize, lineHeight: `${cellSize}px` }}>Sa</span>
-          </div>
-
-          <div className="flex min-w-0 flex-1" style={{ gap }}>
-            {weeks.map((col, wi) => (
-              <div key={wi} className="flex min-w-0 flex-1 flex-col" style={{ gap }}>
-                {col.map((cell) => {
-                  const isFuture = cell.date > today
-                  return (
-                    <div
-                      key={cell.key}
-                      title={
-                        isFuture
-                          ? undefined
-                          : `${
-                              cell.count > 0 ? cell.count : 'No'
-                            } dictation${cell.count === 1 ? '' : 's'} on ${cell.date.toLocaleDateString(
-                              undefined,
-                              { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
-                            )}`
-                      }
-                      className="rounded-[2px]"
-                      style={{
-                        width: cellSize,
-                        height: cellSize,
-                        backgroundColor: isFuture ? 'transparent' : cellColor(cell.count),
-                      }}
-                    />
-                  )
-                })}
-              </div>
-            ))}
-          </div>
+        <div className="flex w-full" style={{ gap }}>
+          {weeks.map((col, wi) => (
+            <div key={wi} className="flex min-w-0 flex-1 flex-col" style={{ gap }}>
+              {col.map((cell) => {
+                const isFuture = cell.date > today
+                return (
+                  <div
+                    key={cell.key}
+                    title={
+                      isFuture
+                        ? undefined
+                        : `${
+                            cell.count > 0 ? cell.count : 'No'
+                          } dictation${cell.count === 1 ? '' : 's'} on ${cell.date.toLocaleDateString(
+                            undefined,
+                            { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
+                          )}`
+                    }
+                    className="rounded-[2px]"
+                    style={{
+                      width: cellSize,
+                      height: cellSize,
+                      backgroundColor: isFuture ? 'transparent' : cellColor(cell.count),
+                    }}
+                  />
+                )
+              })}
+            </div>
+          ))}
         </div>
       </div>
     </div>
   )
 }
 
-/** Delete every dictation in a chosen date range. Two-step, so it can't fire by accident. */
-function RangeDelete({ onDeleted }: { onDeleted: () => void }) {
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const [confirming, setConfirming] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [note, setNote] = useState<string | null>(null)
-
-  const valid = from !== '' && to !== '' && from <= to
-
-  const runDelete = async () => {
-    setBusy(true)
-    setNote(null)
-    try {
-      const start = Math.floor(new Date(`${from}T00:00:00`).getTime() / 1000)
-      const end = Math.floor(new Date(`${to}T23:59:59`).getTime() / 1000)
-      const removed = await ipc.deleteTranscriptsBetween(start, end)
-      setNote(`Deleted ${removed} ${removed === 1 ? 'entry' : 'entries'}.`)
-      setConfirming(false)
-      onDeleted()
-    } catch (e) {
-      setNote(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="panel p-4">
-      <span className="eyebrow">Delete a date range</span>
-      <div className="mt-2.5 flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-[11px] text-muted-foreground">From</span>
-          <input
-            type="date"
-            value={from}
-            max={to || undefined}
-            onChange={(e) => {
-              setFrom(e.target.value)
-              setConfirming(false)
-            }}
-            className="input w-40"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[11px] text-muted-foreground">To</span>
-          <input
-            type="date"
-            value={to}
-            min={from || undefined}
-            onChange={(e) => {
-              setTo(e.target.value)
-              setConfirming(false)
-            }}
-            className="input w-40"
-          />
-        </label>
-
-        {confirming ? (
-          <div className="flex items-center gap-2">
-            <button onClick={runDelete} disabled={busy} className="btn-danger btn-sm">
-              {busy ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Trash2 className="h-3 w-3" />
-              )}
-              Confirm delete
-            </button>
-            <button
-              onClick={() => setConfirming(false)}
-              disabled={busy}
-              className="btn-ghost btn-sm"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setConfirming(true)}
-            disabled={!valid}
-            className="btn-secondary btn-sm"
-          >
-            <Trash2 className="h-3 w-3" />
-            Delete range
-          </button>
-        )}
-      </div>
-      {note && <p className="mt-2 text-[11px] text-muted-foreground">{note}</p>}
-    </div>
-  )
-}
-
-export function HistoryView() {
+export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
   const [items, setItems] = useState<TranscriptEntry[]>([])
   const [counts, setCounts] = useState<DailyCount[]>([])
   const [offset, setOffset] = useState(0)
@@ -324,7 +239,7 @@ export function HistoryView() {
 
   useEffect(() => {
     reload()
-  }, [reload])
+  }, [reload, reloadToken])
 
   const loadMore = async () => {
     setLoadingMore(true)
@@ -441,11 +356,6 @@ export function HistoryView() {
                 </button>
               </div>
             )}
-          </div>
-
-          {/* Right rail — the date-range delete control sits here, not under the heatmap. */}
-          <div className="w-[300px] flex-shrink-0">
-            <RangeDelete onDeleted={reload} />
           </div>
         </div>
       )}

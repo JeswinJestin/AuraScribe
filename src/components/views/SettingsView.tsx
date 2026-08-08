@@ -15,6 +15,7 @@ function HotkeyCapture({
   onChange: (combo: string) => void
 }) {
   const [capturing, setCapturing] = useState(false)
+  const [hint, setHint] = useState<string | null>(null)
 
   useEffect(() => {
     if (!capturing) return
@@ -24,6 +25,7 @@ function HotkeyCapture({
       e.preventDefault()
       if (e.code === 'Escape') {
         setCapturing(false)
+        setHint(null)
         return
       }
       if (/^(Control|Alt|Shift|Meta)/.test(e.code)) {
@@ -33,8 +35,16 @@ function HotkeyCapture({
         if (e.code.startsWith('Meta')) mods.add('Super')
         return
       }
+      // A lone key (a letter, a number, Space, F-key…) would hijack dictation every time you
+      // type that key anywhere. A shortcut must combine a modifier with a key — that is what
+      // makes a global hotkey usable while you keep typing in other apps.
+      if (mods.size === 0) {
+        setHint('Hold a modifier (Ctrl/Alt/Shift) and press a key, e.g. Ctrl+Shift+Space.')
+        return
+      }
       onChange([...mods, e.code].join('+'))
       setCapturing(false)
+      setHint(null)
     }
 
     window.addEventListener('keydown', handler)
@@ -42,12 +52,23 @@ function HotkeyCapture({
   }, [capturing, onChange])
 
   return (
-    <button
-      onClick={() => setCapturing(true)}
-      className={`input mono text-center ${capturing ? 'border-primary' : ''}`}
-    >
-      {capturing ? 'Press your keys…' : value}
-    </button>
+    <div className="flex flex-col gap-1">
+      <button
+        onClick={() => {
+          setCapturing((c) => !c)
+          setHint(null)
+        }}
+        className={`input mono text-center ${capturing ? 'border-primary' : ''}`}
+      >
+        {capturing ? 'Press your keys…' : value}
+      </button>
+      {(hint || capturing) && (
+        <span className="text-[11px] leading-snug text-muted-foreground">
+          {hint ??
+            'Hold a modifier (Ctrl / Alt / Shift) and press a key — a single key won’t be accepted.'}
+        </span>
+      )}
+    </div>
   )
 }
 
