@@ -15,6 +15,11 @@ impl Database {
         std::fs::create_dir_all(&data_dir).ok();
 
         let db_path = data_dir.join("aurascribe.db");
+        // Whether we are creating the database this launch. Captured *before* connecting, since
+        // `create_if_missing` is about to bring the file into existence. A fresh install is the
+        // only time we impose the new defaults (Glass appearance, show onboarding); returning
+        // users keep whatever they had.
+        let is_fresh = !db_path.exists();
         let url = format!("sqlite:{}?mode=rwc", db_path.display());
         let options = SqliteConnectOptions::from_str(&url)?
             .create_if_missing(true)
@@ -40,6 +45,17 @@ impl Database {
             .execute(&pool)
             .await?;
 
+        // Brand-new install: adopt the current defaults that the migrations can't express
+        // (migration 002's row was created with the old `dark`/already-onboarded defaults, and
+        // it must stay editable for upgrades). Glass is the intended first-impression look, and
+        // onboarding should run once. Returning users are never touched by this.
+        if is_fresh {
+            sqlx::query("UPDATE settings SET theme = 'glass', onboarded = 0 WHERE id = 1")
+                .execute(&pool)
+                .await?;
+            info!("Fresh install: defaulted to Glass appearance and enabled onboarding");
+        }
+
         info!("Database initialized at {}", db_path.display());
 
         Ok(Self { pool })
@@ -52,7 +68,7 @@ impl Database {
             "UPDATE settings SET
                 hotkey = $1, hotkey_mode = $2, whisper_model = $3, mic_device = $4,
                 ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
-                theme = $8, start_at_login = $9, sound_cues = $10
+                theme = $8, start_at_login = $9, sound_cues = $10, onboarded = $11
             WHERE id = 1",
         )
         .bind(&s.hotkey)
@@ -65,6 +81,7 @@ impl Database {
         .bind(&s.theme)
         .bind(s.start_at_login)
         .bind(s.sound_cues)
+        .bind(s.onboarded)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -303,6 +320,7 @@ pub struct SettingsRow {
     pub theme: String,
     pub start_at_login: i32,
     pub sound_cues: i32,
+    pub onboarded: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]

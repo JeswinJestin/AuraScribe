@@ -17,6 +17,9 @@ pub struct Settings {
     pub theme: String,
     pub start_at_login: bool,
     pub sound_cues: bool,
+    /// True once the first-run walkthrough has been dismissed. The UI shows onboarding while
+    /// this is false; completing (or skipping) it saves `true`.
+    pub onboarded: bool,
 }
 
 impl Default for Settings {
@@ -24,14 +27,20 @@ impl Default for Settings {
         Self {
             hotkey: "Ctrl+Shift+Space".to_string(),
             hotkey_mode: "toggle".to_string(),
-            whisper_model: "base.en".to_string(),
+            // Moonshine is the shipped default engine (v0.4.x bundles it). The Whisper catalogue
+            // is now empty, so a Whisper-only dev build ships no built-in model — the default
+            // simply won't resolve there, which is fine (that build is not the product).
+            whisper_model: "moonshine-base-en".to_string(),
             mic_device: None,
             ai_cleanup_enabled: true,
             remove_fillers: true,
             language: "en".to_string(),
-            theme: "light".to_string(),
+            theme: "glass".to_string(),
             start_at_login: false,
             sound_cues: true,
+            // Safe fallback if the DB read ever fails: don't nag. A genuine fresh install gets
+            // onboarded = 0 from the database (see `Database::new`), which is authoritative.
+            onboarded: true,
         }
     }
 }
@@ -89,6 +98,7 @@ async fn load_settings_from_db(db: &Database) -> Result<Settings, String> {
         theme: row.theme,
         start_at_login: row.start_at_login != 0,
         sound_cues: row.sound_cues != 0,
+        onboarded: row.onboarded != 0,
     })
 }
 
@@ -121,6 +131,7 @@ pub async fn save_settings(
             theme: settings.theme.clone(),
             start_at_login: settings.start_at_login as i32,
             sound_cues: settings.sound_cues as i32,
+            onboarded: settings.onboarded as i32,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -288,6 +299,10 @@ pub async fn start_recording(
             return Err("No Whisper model loaded. Load one in Settings first.".to_string());
         }
     }
+
+    // Remember the window the user is dictating into, captured now (before the overlay appears),
+    // so the transcript can be pasted back into it even if stopping via the overlay moved focus.
+    *state.target_window.lock().await = crate::system::capture_foreground_window();
 
     // Cue plays before the mic stream opens below, so the tone is never captured into the
     // recording. This is also the fastest possible acknowledgement of the hotkey — it fires
@@ -506,14 +521,21 @@ pub async fn stop_recording(
         return Ok(());
     }
 
-    let settings = {
+    let (settings, dictionary, snippets) = {
         let db = state.db.lock().await;
-        load_settings_from_db(&db).await?
+        let settings = load_settings_from_db(&db).await?;
+        // Loaded once per dictation, off the hot path. Empty lists make `expand::apply` a no-op,
+        // so users who never open Words/Snippets pay nothing.
+        let dictionary = db.list_dictionary().await.unwrap_or_default();
+        let snippets = db.list_snippets().await.unwrap_or_default();
+        (settings, dictionary, snippets)
     };
 
     let db_arc = state.db.clone();
     let status_arc = state.status.clone();
     let app_clone = app.clone();
+    // The window to paste back into (see start_recording). Read now; used just before injection.
+    let target_window = *state.target_window.lock().await;
 
     tokio::spawn(async move {
         // Now measures the wait the user actually experienced, not total transcription
@@ -540,6 +562,12 @@ pub async fn stop_recording(
             raw_text.clone()
         };
 
+        // Apply the personal dictionary and snippet expansions to the final text. This is what
+        // makes the Words and Snippets screens actually affect dictation — before this they were
+        // stored and displayed but never touched the transcript. Runs even when cleanup is off,
+        // so corrections and canned phrases work regardless of that toggle.
+        let cleaned = crate::expand::apply(&cleaned, &dictionary, &snippets);
+
         // Recording silence or background noise leaves nothing but Whisper's non-speech
         // annotations, which cleanup strips. Injecting the empty remainder — or a lone
         // stray "." — would type junk wherever the user's cursor happens to be.
@@ -551,6 +579,12 @@ pub async fn stop_recording(
             emit_status(&app_clone, &status).await;
             return;
         }
+
+        // Restore focus to the app the user was dictating into before pasting. This is the fix
+        // for click-to-stop: the overlay click can steal foreground, and injection targets the
+        // focused window — so without this the paste went nowhere (the hotkey-stop path, which
+        // never moved focus, always worked). A no-op when focus never moved.
+        crate::system::focus_window(target_window);
 
         if let Err(e) = TextInjector::new().inject_text(&cleaned) {
             let mut status = status_arc.lock().await;
@@ -984,6 +1018,7 @@ mod wire_format_tests {
             "theme",
             "start_at_login",
             "sound_cues",
+            "onboarded",
         ] {
             assert!(
                 json.get(field).is_some(),

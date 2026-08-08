@@ -29,7 +29,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     // transparent, undecorated, always-on-top window — see docs/HANDOFF.md.
     let path = if tauri::is_dev() { "overlay/" } else { "overlay/index.html" };
 
-    WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App(path.into()))
+    let window = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App(path.into()))
         .title("AuraScribe")
         .inner_size(WIDTH, HEIGHT)
         .resizable(false)
@@ -42,8 +42,42 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .focused(false)
         .build()?;
 
+    // The overlay is clickable — clicking the pill stops dictation (see the overlay page). But
+    // injection pastes into whatever window has focus, so if clicking the overlay *activated*
+    // it, the transcript would land in the overlay instead of the user's app. `WS_EX_NOACTIVATE`
+    // makes the window receive the click without ever becoming the foreground window, so the
+    // target app stays focused throughout. Without this, click-to-stop would corrupt every
+    // dictation it ended.
+    make_non_activating(&window);
+
     Ok(())
 }
+
+/// Mark the overlay window as non-activating so clicking it never steals focus from the app the
+/// user is dictating into. Windows-only; a no-op elsewhere.
+#[cfg(target_os = "windows")]
+fn make_non_activating(window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    let Ok(handle) = window.hwnd() else {
+        tracing::warn!("Could not get overlay HWND; click-to-stop may steal focus");
+        return;
+    };
+    // Reconstruct our own `windows`-crate HWND from the raw handle so this is independent of
+    // whatever `windows` version Tauri exposes `hwnd()` as.
+    let hwnd = HWND(handle.0);
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new = ex | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn make_non_activating(_window: &tauri::WebviewWindow) {}
 
 pub fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {

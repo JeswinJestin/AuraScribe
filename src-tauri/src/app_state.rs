@@ -22,6 +22,10 @@ pub struct AppState {
     pub recording_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
     pub stop_flag: Arc<Mutex<bool>>,
     pub asr: Arc<Asr>,
+    /// The foreground window when the current recording started, as an `isize` HWND (0 = none).
+    /// Restored right before injection so click-to-stop pastes into the right app — see
+    /// `system::capture_foreground_window` / `focus_window`.
+    pub target_window: Arc<Mutex<isize>>,
     /// Results accumulated by the chunker during a recording.
     pub chunk_state: Arc<Mutex<ChunkState>>,
     /// The chunker itself. `stop_recording` awaits this; the task flushes the tail of the

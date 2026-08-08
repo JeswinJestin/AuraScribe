@@ -8,10 +8,17 @@ mod cleanup;
 mod commands;
 mod db;
 mod engine;
+mod expand;
 mod hotkey;
 mod injection;
 #[cfg(feature = "moonshine")]
 mod moonshine;
+#[cfg(feature = "moonshine")]
+mod parakeet;
+#[cfg(feature = "moonshine")]
+mod dolphin;
+#[cfg(feature = "moonshine")]
+mod nemo_ctc;
 mod overlay;
 mod sound;
 mod system;
@@ -56,13 +63,75 @@ fn fit_to_screen(window: &tauri::WebviewWindow) {
     let _ = window.center();
 }
 
+/// Makes `tracing` write to `%LOCALAPPDATA%\AuraScribe\aurascribe.log`. A release build has no
+/// console (`windows_subsystem = "windows"`), so without this every log line vanished — which is
+/// why "why isn't the model transcribing?" was undiagnosable. Shares an `Arc<Mutex<File>>` so a
+/// new writer is handed out per event without reopening the file. No new dependency.
+#[derive(Clone)]
+struct FileMaker(Arc<std::sync::Mutex<std::fs::File>>);
+
+struct FileHandle(Arc<std::sync::Mutex<std::fs::File>>);
+
+impl std::io::Write for FileHandle {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().map_err(|_| std::io::ErrorKind::Other)?.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().map_err(|_| std::io::ErrorKind::Other)?.flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileMaker {
+    type Writer = FileHandle;
+    fn make_writer(&'a self) -> Self::Writer {
+        FileHandle(self.0.clone())
+    }
+}
+
+/// Open the log file, truncating it first if the previous session left it large so it can't grow
+/// without bound. Returns `None` if the data directory can't be created (logging then falls back
+/// to stdout only).
+fn open_log_file() -> Option<std::fs::File> {
+    use std::io::Write as _;
+    let dir = dirs::data_local_dir()?.join("AuraScribe");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("aurascribe.log");
+    let too_big = std::fs::metadata(&path).map(|m| m.len() > 5_000_000).unwrap_or(false);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(!too_big)
+        .write(true)
+        .truncate(too_big)
+        .open(&path)
+        .ok()?;
+    let _ = writeln!(
+        file,
+        "\n==== AuraScribe {} started {} ====",
+        env!("CARGO_PKG_VERSION"),
+        chrono::Utc::now().to_rfc3339()
+    );
+    Some(file)
+}
+
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "aurascribe=debug,tauri=info".into()),
-        )
+    use tracing_subscriber::prelude::*;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "aurascribe=debug,tauri=info".into());
+
+    // Always log to stdout (dev). Additionally log to a file when we can open one, so an
+    // installed release build is diagnosable — the file is what the user can send back.
+    let file_layer = open_log_file().map(|f| {
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(FileMaker(Arc::new(std::sync::Mutex::new(f))))
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(file_layer)
         .init();
+    tracing::info!("Logging to %LOCALAPPDATA%\\AuraScribe\\aurascribe.log");
 
     tauri::Builder::default()
         // Must be registered first. Without it, launching from the Start Menu while the app
@@ -128,6 +197,7 @@ fn main() {
                 recording_handle: Arc::new(Mutex::new(None)),
                 stop_flag: Arc::new(Mutex::new(false)),
                 asr,
+                target_window: Arc::new(Mutex::new(0)),
                 chunk_state: Arc::new(Mutex::new(Default::default())),
                 chunk_task: Arc::new(Mutex::new(None)),
             };
