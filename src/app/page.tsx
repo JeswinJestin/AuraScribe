@@ -13,6 +13,7 @@ import { DictionaryView } from '@/components/views/DictionaryView'
 import { SnippetsView } from '@/components/views/SnippetsView'
 import { InsightsView } from '@/components/views/InsightsView'
 import { SettingsView } from '@/components/views/SettingsView'
+import { Onboarding } from '@/components/Onboarding'
 
 const DEFAULT_STATUS: Status = {
   is_recording: false,
@@ -28,14 +29,17 @@ const DEFAULT_STATUS: Status = {
 const DEFAULT_SETTINGS: Settings = {
   hotkey: 'Ctrl+Shift+Space',
   hotkey_mode: 'toggle',
-  whisper_model: 'base.en',
+  whisper_model: 'moonshine-base-en',
   mic_device: null,
   ai_cleanup_enabled: true,
   remove_fillers: true,
   language: 'en',
-  theme: 'light',
+  theme: 'glass',
   start_at_login: false,
   sound_cues: true,
+  // Fallback before real settings load: assume onboarded so the browser preview / a failed
+  // read never flashes the walkthrough. A genuine fresh install reports onboarded=false.
+  onboarded: true,
 }
 
 /** Frameless-window controls. No-op outside Tauri (e.g. the browser preview). */
@@ -158,11 +162,25 @@ export default function App() {
 
   if (!ready) return <div className="h-screen w-screen bg-background" />
 
+  // First run only. `onboarded` is false solely on a freshly created database (see the Rust
+  // `Database::new` fresh-install path); returning users and the browser preview never see it.
+  const showOnboarding = tauri && !settings.onboarded
+
   return (
     // Full-bleed in every appearance — the app fills the frameless window edge to edge.
     // "Glass" is not a smaller box: it is the same full size, but the shell and its cards
     // become frosted glass over a bluish backdrop (see `.glass-bg` in globals.css).
     <div className="h-screen w-screen overflow-hidden">
+      {showOnboarding && (
+        <Onboarding
+          hotkey={settings.hotkey}
+          onFinish={() => saveSettings({ onboarded: true })}
+          onOpenModels={() => {
+            setView('settings')
+            saveSettings({ onboarded: true })
+          }}
+        />
+      )}
       <div className="app-shell flex h-full flex-col overflow-hidden bg-background">
         {/* Custom titlebar — the window is frameless, so this is the drag handle and the
             min / maximize / close controls. */}

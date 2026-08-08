@@ -144,7 +144,7 @@ export function WidgetRail({
           <Stat value={model} sub="running on this device" />
         </Widget>
         <Widget title="Version">
-          <Body>AuraScribe v1.0 · Windows</Body>
+          <Body>AuraScribe v0.4.1 · Windows</Body>
         </Widget>
       </>
     ),

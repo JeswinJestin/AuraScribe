@@ -15,6 +15,8 @@ export interface Settings {
   theme: 'light' | 'dark' | 'system' | 'glass'
   start_at_login: boolean
   sound_cues: boolean
+  /** False until the first-run walkthrough is dismissed; the UI shows onboarding while false. */
+  onboarded: boolean
 }
 
 export interface Status {
@@ -32,8 +34,8 @@ export interface Status {
 export interface ModelInfo {
   id: string
   name: string
-  /** Which backend runs this model. 'whisper' is v1; 'moonshine'/'parakeet' are the newer engines. */
-  engine: 'whisper' | 'moonshine' | 'parakeet'
+  /** Which backend runs this model. 'whisper' is v1; the rest run on sherpa-onnx. */
+  engine: 'whisper' | 'moonshine' | 'parakeet' | 'dolphin' | 'nemoctc'
   size_mb: number
   multilingual: boolean
   /** 1 = fastest */

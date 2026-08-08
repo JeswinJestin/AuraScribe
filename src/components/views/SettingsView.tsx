@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Download, Loader2, Check, Trash2, Globe, AlertTriangle } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { ModelInfo, Settings, Status } from '@/lib/ipc'
+import { modelDisplay, EUROPEAN_LANGS } from '@/lib/models'
 import { PageHeader, Section, ErrorNote, Toggle } from '@/components/ui'
 
 function HotkeyCapture({
@@ -128,6 +129,18 @@ export function SettingsView({
     }
   }
 
+  // How the Language control should behave for the model that's actually loaded. Parakeet (and
+  // any custom transducer bundle) auto-detects; Moonshine / tiny.en are English-only; a
+  // multilingual Whisper model uses the manual selector.
+  const activeModel = models.find((m) => m.id === status.loaded_model)
+  const langMode: 'auto' | 'english' | 'manual' = !activeModel
+    ? 'manual'
+    : activeModel.engine === 'parakeet' || activeModel.engine === 'dolphin' || activeModel.engine === 'nemoctc'
+    ? 'auto'
+    : activeModel.multilingual
+    ? 'manual'
+    : 'english'
+
   return (
     <div className="flex flex-col gap-3.5 pb-6">
       <PageHeader title="Settings" />
@@ -156,32 +169,29 @@ export function SettingsView({
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="mono text-sm">{m.id}</span>
+                      <span className="text-[14px] font-semibold">{modelDisplay(m).title}</span>
                       {m.recommended && (
                         <span className="rounded bg-primary/12 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                           Recommended
                         </span>
                       )}
-                      {m.multilingual && (
-                        <span
-                          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
-                          title="Handles languages beyond English"
-                        >
-                          <Globe className="h-3 w-3" />
-                          multilingual
-                        </span>
-                      )}
                     </div>
-                    <div className="mono mt-1 text-[11px] text-muted-foreground">
+                    <div className="mono mt-0.5 text-[11px] text-muted-foreground">
+                      Powered by {modelDisplay(m).poweredBy}
+                      {' · '}
                       {m.size_mb >= 1000
                         ? `${(m.size_mb / 1000).toFixed(1)} GB`
                         : `${m.size_mb} MB`}
                       {' · '}
                       {m.realtime_factor <= 1
                         ? `${m.realtime_factor.toFixed(1)}x — faster than you speak`
-                        : `${m.realtime_factor.toFixed(1)}x the length of what you say`}
-                      {' · '}
-                      accuracy {m.accuracy}/5
+                        : `${m.realtime_factor.toFixed(1)}x`}
+                    </div>
+
+                    {/* Full language coverage — so you know exactly what a model offers. */}
+                    <div className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                      <Globe className="mt-0.5 h-3 w-3 shrink-0 opacity-70" />
+                      <span>{modelDisplay(m).languages}</span>
                     </div>
 
                     {/* Shown before download, not after. A user picked the model badged most
@@ -322,25 +332,45 @@ export function SettingsView({
           </label>
           <label>
             <span className="mb-1 block text-xs font-medium">Language</span>
-            <select
-              className="input"
-              value={settings.language}
-              onChange={(e) => onSaveSettings({ language: e.target.value })}
-            >
-              <option value="en">English</option>
-              <option value="auto">Detect automatically</option>
-              <option value="hi">Hindi</option>
-              <option value="ml">Malayalam</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-              <option value="ja">Japanese</option>
-              <option value="zh">Chinese</option>
-            </select>
+            {/* The language control depends on the active engine: Parakeet auto-detects and
+                ignores a manual choice; Moonshine / tiny.en are English-only; only a
+                multilingual Whisper model actually uses the manual selector. Showing an
+                editable dropdown for a model that ignores it was misleading. */}
+            {langMode === 'auto' ? (
+              <div className="input flex items-center text-muted-foreground" title={EUROPEAN_LANGS}>
+                Detected automatically
+              </div>
+            ) : langMode === 'english' ? (
+              <div className="input flex items-center text-muted-foreground">English</div>
+            ) : (
+              <select
+                className="input"
+                value={settings.language}
+                onChange={(e) => onSaveSettings({ language: e.target.value })}
+              >
+                <option value="auto">Detect automatically</option>
+                <option value="en">English</option>
+                <option value="hi">Hindi</option>
+                <option value="ml">Malayalam</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="ja">Japanese</option>
+                <option value="zh">Chinese</option>
+              </select>
+            )}
           </label>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Languages other than English need a multilingual model.
+          {langMode === 'auto'
+            ? activeModel?.engine === 'nemoctc'
+              ? `${modelDisplay(activeModel).languages} No language selection needed.`
+              : activeModel?.engine === 'dolphin'
+              ? 'Detects the language automatically across ~40 Asian languages, including Hindi, Tamil, Telugu, Bengali, Urdu, Marathi, Gujarati and more. It does not cover Malayalam or Kannada.'
+              : 'Detects the language automatically across 25 European languages (English, German, French, Spanish, Italian, Portuguese, Dutch, Polish, Russian, Ukrainian and more). It does not cover Hindi, Malayalam, or other non-European languages.'
+            : langMode === 'english'
+            ? 'This model transcribes English only. Multilingual dictation needs a multilingual model.'
+            : 'This model uses the language you pick above.'}
         </p>
       </Section>
 
