@@ -5,7 +5,7 @@ import { Download, Loader2, Check, Trash2, Globe, AlertTriangle } from 'lucide-r
 import * as ipc from '@/lib/ipc'
 import type { ModelInfo, Settings, Status } from '@/lib/ipc'
 import { modelDisplay, EUROPEAN_LANGS } from '@/lib/models'
-import { PageHeader, Section, ErrorNote, Toggle } from '@/components/ui'
+import { PageHeader, Section, ErrorNote, Toggle, Select } from '@/components/ui'
 
 function HotkeyCapture({
   value,
@@ -277,16 +277,15 @@ export function SettingsView({
           </label>
           <label>
             <span className="mb-1 block text-xs font-medium">Mode</span>
-            <select
-              className="input"
+            <Select
+              aria-label="Hotkey mode"
               value={settings.hotkey_mode}
-              onChange={(e) =>
-                onSaveSettings({ hotkey_mode: e.target.value as Settings['hotkey_mode'] })
-              }
-            >
-              <option value="toggle">Tap to start and stop</option>
-              <option value="press-hold">Hold while speaking</option>
-            </select>
+              onChange={(v) => onSaveSettings({ hotkey_mode: v as Settings['hotkey_mode'] })}
+              options={[
+                { value: 'toggle', label: 'Tap to start and stop' },
+                { value: 'press-hold', label: 'Hold while speaking' },
+              ]}
+            />
           </label>
         </div>
       </Section>
@@ -317,18 +316,15 @@ export function SettingsView({
         <div className="grid grid-cols-2 gap-3">
           <label>
             <span className="mb-1 block text-xs font-medium">Microphone</span>
-            <select
-              className="input"
+            <Select
+              aria-label="Microphone"
               value={settings.mic_device ?? ''}
-              onChange={(e) => onSaveSettings({ mic_device: e.target.value || null })}
-            >
-              <option value="">System default</option>
-              {micDevices.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => onSaveSettings({ mic_device: v || null })}
+              options={[
+                { value: '', label: 'System default' },
+                ...micDevices.map((d) => ({ value: d, label: d })),
+              ]}
+            />
           </label>
           <label>
             <span className="mb-1 block text-xs font-medium">Language</span>
@@ -343,21 +339,22 @@ export function SettingsView({
             ) : langMode === 'english' ? (
               <div className="input flex items-center text-muted-foreground">English</div>
             ) : (
-              <select
-                className="input"
+              <Select
+                aria-label="Language"
                 value={settings.language}
-                onChange={(e) => onSaveSettings({ language: e.target.value })}
-              >
-                <option value="auto">Detect automatically</option>
-                <option value="en">English</option>
-                <option value="hi">Hindi</option>
-                <option value="ml">Malayalam</option>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="ja">Japanese</option>
-                <option value="zh">Chinese</option>
-              </select>
+                onChange={(v) => onSaveSettings({ language: v })}
+                options={[
+                  { value: 'auto', label: 'Detect automatically' },
+                  { value: 'en', label: 'English' },
+                  { value: 'hi', label: 'Hindi' },
+                  { value: 'ml', label: 'Malayalam' },
+                  { value: 'es', label: 'Spanish' },
+                  { value: 'fr', label: 'French' },
+                  { value: 'de', label: 'German' },
+                  { value: 'ja', label: 'Japanese' },
+                  { value: 'zh', label: 'Chinese' },
+                ]}
+              />
             )}
           </label>
         </div>
@@ -388,16 +385,18 @@ export function SettingsView({
           />
           <label className="flex items-center justify-between gap-4">
             <span className="text-sm">Appearance</span>
-            <select
-              className="input w-36"
+            <Select
+              aria-label="Appearance"
+              className="w-36"
               value={settings.theme}
-              onChange={(e) => onSaveSettings({ theme: e.target.value as Settings['theme'] })}
-            >
-              <option value="system">Match system</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-              <option value="glass">Glass</option>
-            </select>
+              onChange={(v) => onSaveSettings({ theme: v as Settings['theme'] })}
+              options={[
+                { value: 'system', label: 'Match system' },
+                { value: 'light', label: 'Light' },
+                { value: 'dark', label: 'Dark' },
+                { value: 'glass', label: 'Glass' },
+              ]}
+            />
           </label>
         </div>
       </Section>
