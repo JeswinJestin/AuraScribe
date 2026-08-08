@@ -23,6 +23,8 @@ pub enum EngineKind {
     Whisper,
     Moonshine,
     Parakeet,
+    Dolphin,
+    NemoCtc,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -61,9 +63,16 @@ pub struct ModelInfo {
 /// improved far more cheaply by silence trimming and (future) a personal dictionary than by a
 /// model the machine cannot run.
 ///
-/// `base` is the multilingual counterpart of `base.en` — same size and speed, tuned for
-/// languages beyond English — so dictating in other languages stays possible without the
-/// heavy models. The `.en` variants are more accurate for English specifically.
+/// Only `tiny.en` remains from the Whisper catalogue. The `base.en` and `base` (multilingual)
+/// models were **removed in v0.4.1**: the Moonshine engine's `moonshine-tiny-en` is both faster
+/// (~0.1x vs `base.en`'s ~0.5x) *and* more accurate on English, so a Whisper `base` model was a
+/// strictly worse option that only invited a slower, less accurate experience. `tiny.en` is kept
+/// as the smallest possible fallback for the weakest machines and as the always-present Whisper
+/// engine (Moonshine is compiled in only under the `moonshine` feature).
+///
+/// Multilingual dictation is intentionally *not* served by Whisper `base` any more; the planned
+/// path is a fast multilingual ONNX model (SenseVoice/Parakeet) on the existing sherpa-onnx
+/// engine — see HANDOFF "Next feature". Until that lands, the shipped models are English.
 ///
 /// If GPU offload lands (see `build-vulkan.bat`), the large models become viable again and
 /// can be reinstated behind a `gpu_enabled()` check.
@@ -81,12 +90,15 @@ pub struct ModelInfo {
 /// laptop's fan screamed. Nothing in the UI had warned them.
 const MODELS: &[(&str, EngineKind, u64, bool, u8, u8, f32)] = &[
     // (id, engine, size_mb, multilingual, speed(1=fastest), accuracy(5=best), cpu_cost)
-    ("tiny.en", EngineKind::Whisper, 75, false, 1, 2, 0.2), // English · fastest, weak machines
-    ("base.en", EngineKind::Whisper, 142, false, 2, 3, 0.5), // English · Whisper recommended
-    ("base", EngineKind::Whisper, 142, true, 2, 2, 0.6),    // multilingual · same speed
-    // NOTE: heavier Whisper models (small, large-v3-turbo) are deliberately NOT offered. On a
-    // CPU they are far too slow (minutes per clip) — the opposite of what this app is for. The
-    // path to better accuracy is a light, fast engine (Moonshine), not a bigger Whisper model.
+    //
+    // The English `tiny.en`/`base.en` and multilingual `base` were removed — the Moonshine models
+    // beat them on English at the same speed. What Whisper is kept for is the one thing the fast
+    // engines can't do: the **long tail of languages** none of them cover — most importantly
+    // European languages. Whisper `small` was here as the slow all-99-languages fallback, but was
+    // removed in Round 28 (owner: "get rid of it, it's slow / not working") once IndicConformer
+    // gave accurate Malayalam/Kannada. The fast engines — Moonshine (English), Dolphin (~40 Asian),
+    // Parakeet (25 European), IndicConformer (Malayalam/Kannada) — now cover what matters, so the
+    // Whisper catalogue is empty again; the engine stays only as a code fallback.
 ];
 
 /// Whether a GPU backend is compiled in. `use_gpu(true)` is requested unconditionally, but
@@ -452,34 +464,31 @@ mod model_selection_tests {
         }
     }
 
-    /// Exactly one recommendation, and it must actually keep up with speech.
+    /// Any Whisper model that *is* recommended must keep up with speech and carry no warning.
+    /// The Whisper catalogue is empty today (recommendation is decided across all engines by the
+    /// facade, see `engine.rs`), so this holds vacuously — it guards a future re-addition.
     #[test]
-    fn the_recommended_model_is_faster_than_speaking() {
-        let all = models();
-        let rec: Vec<_> = all.iter().filter(|m| m.recommended).collect();
-        assert_eq!(rec.len(), 1, "expected exactly one recommended model");
-
-        let r = rec[0];
-        assert!(
-            r.realtime_factor <= 1.0,
-            "recommended {} runs at {:.1}x — slower than speaking",
-            r.id,
-            r.realtime_factor
-        );
-        assert!(r.warning.is_none(), "recommended model should not carry a warning");
+    fn any_recommended_whisper_model_keeps_up() {
+        for r in models().into_iter().filter(|m| m.recommended) {
+            assert!(
+                r.realtime_factor <= 1.0,
+                "recommended {} runs at {:.1}x — slower than speaking",
+                r.id,
+                r.realtime_factor
+            );
+            assert!(r.warning.is_none(), "recommended model should not carry a warning");
+        }
     }
 
-    /// Without a GPU backend compiled in, the heavy tiers must never be the recommendation.
+    /// Without a GPU backend, no large Whisper model may ever be recommended.
     #[test]
     fn cpu_only_does_not_recommend_a_large_model() {
         if gpu_enabled() {
             return;
         }
-        let rec = models().into_iter().find(|m| m.recommended).unwrap();
         assert!(
-            !rec.id.starts_with("large"),
-            "CPU-only build recommended {}, which cannot keep up",
-            rec.id
+            !models().into_iter().any(|m| m.recommended && m.id.starts_with("large")),
+            "CPU-only build recommended a large model, which cannot keep up"
         );
     }
 }

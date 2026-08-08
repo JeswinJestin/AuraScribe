@@ -1,6 +1,6 @@
 [package]
 name = "aurascribe"
-version = "0.4.0"
+version = "0.4.1"
 description = "Free, open-source, privacy-first voice dictation that works everywhere"
 authors = ["AuraScribe Contributors"]
 license = "MIT"
@@ -44,6 +44,9 @@ whisper-rs = { version = "0.16", optional = true }
 # `download-binaries` fetches a prebuilt, cached sherpa-onnx + onnxruntime for the target,
 # so there is no whisper-style CMake build. `directml`/`cuda` (opt-in, later) add GPU.
 sherpa-rs = { version = "0.6.8", optional = true, features = ["download-binaries"] }
+# Raw sherpa-onnx FFI — needed only for the NeMo-CTC offline recognizer, which sherpa-rs has no
+# safe wrapper for. Used by nemo_ctc.rs to run AI4Bharat IndicConformer (Malayalam/Kannada/...).
+sherpa-rs-sys = { version = "0.6.8", optional = true }
 
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
@@ -85,7 +88,7 @@ whisper = ["dep:whisper-rs"]
 
 # Moonshine engine (ONNX via sherpa-onnx). Opt-in until the download + transcribe path is
 # proven by a real transcript on a real machine; it will join `default` once verified.
-moonshine = ["dep:sherpa-rs"]
+moonshine = ["dep:sherpa-rs", "dep:sherpa-rs-sys"]
 
 # GPU backends. `use_gpu(true)` is requested unconditionally in asr.rs but is a no-op unless
 # one of these is compiled in — which is why transcription runs on CPU by default no matter

@@ -41,8 +41,12 @@ const MODEL_FILES: [&str; 5] = [
 /// Sizes are the sum of the five int8 files (English-only models today).
 const MOONSHINE_MODELS: &[(&str, &str, u64, u8, u8, f32)] = &[
     // (id, hf_variant, size_mb, speed(1=fastest), accuracy(5=best), cpu_cost estimate)
-    ("moonshine-tiny-en", "tiny", 110, 1, 3, 0.10), // fastest, for weak machines
-    ("moonshine-base-en", "base", 286, 1, 4, 0.15), // the advanced default-to-be
+    // `moonshine-base-en` is the English default (recommended). `moonshine-tiny-en` is kept as the
+    // genuinely-light option (110 MB vs 286 MB) — a smaller download for people who want the
+    // lightest install and are fine with slightly lower accuracy. (The Whisper `tiny.en`/`base`
+    // were removed — those were strictly worse; Moonshine tiny is still a fast, useful tier.)
+    ("moonshine-base-en", "base", 286, 1, 4, 0.15),
+    ("moonshine-tiny-en", "tiny", 110, 1, 3, 0.10),
 ];
 
 /// HuggingFace repo that hosts a model's five files flat (no archive to unpack).
@@ -233,7 +237,14 @@ impl MoonshineASR {
     pub fn transcribe(&self, audio: &[f32], _language: Option<&str>) -> Result<String> {
         let mut guard = self.recognizer.lock().unwrap();
         let recognizer = guard.as_mut().context("Moonshine model not loaded")?;
-        let result = recognizer.transcribe(16_000, audio);
-        Ok(result.text.trim().to_string())
+        let started = std::time::Instant::now();
+        let text = recognizer.transcribe(16_000, audio).text.trim().to_string();
+        tracing::info!(
+            samples = audio.len(),
+            out_chars = text.len(),
+            took_ms = started.elapsed().as_millis() as u64,
+            "Moonshine transcribed a chunk"
+        );
+        Ok(text)
     }
 }
