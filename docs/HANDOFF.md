@@ -73,6 +73,26 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### Round 32 (2026-08-08) — DateField calendar could not select; calendar anchored per request
+
+Owner reinstalled round 31 and reported: the calendar looks right but **nothing is selectable** —
+clicking any day/chevron just closes it; and it should open **below the field**, not above.
+
+- **Root cause of "no selection".** The popover's outside-click guard only checked the field
+  wrapper (`rootRef`), but the panel is *portaled* to `document.body`, so it is not a descendant
+  of the wrapper. Every `mousedown` on a day/chevron therefore counted as "outside" and closed
+  the calendar before the `click` could commit — so no date could ever be picked. Fixed in
+  `DateField` (`ui.tsx`): the guard now also treats clicks inside `panelRef` as inside.
+  Identical latent bug fixed in the custom `Select` (list options were also unselectable the
+  same way) — it now checks `listRef` too.
+- **Anchor placement.** Removed the flip-up logic (`flipUp`) entirely; the calendar now opens
+  pinned **below the field** (`top = rect.bottom + 4`) at the same 256 px width, nudging up
+  **only** as far as needed if it would collide with the window's bottom edge — never swapping
+  to sit above the card.
+- Verified: `tsc --noEmit` clean, 48 tests pass, installer rebuilt
+  (`AuraScribe_1.0.0_x64-setup.exe`, ~8.8 MB). **Owner must reinstall** and re-test: pick a
+  From date, then a To date, month chevrons, and clicking a day actually commits DD/MM/YYYY.
+
 ### Round 31 (2026-08-08) — themed date picker replaces the broken native calendar
 
 Owner reinstalled round 30 and reported the History **"Delete a date range"** card showed no

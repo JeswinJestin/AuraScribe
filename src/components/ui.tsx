@@ -175,11 +175,16 @@ export function Select({
   )
   const selected = options[selectedIndex]
 
-  // Close when clicking anywhere outside the control.
+  // Close only on clicks that land *outside* both the control and the popover. The listbox is
+  // portaled to document.body, so it is not a descendant of rootRef — checking only rootRef
+  // treated every option click as "outside" and closed the list before the click could select.
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      const insideControl = rootRef.current?.contains(t) ?? false
+      const insideList = listRef.current?.contains(t) ?? false
+      if (!insideControl && !insideList) setOpen(false)
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
@@ -405,8 +410,7 @@ export function DateField({
   'aria-label'?: string
 }) {
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null)
-  const [flipUp, setFlipUp] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
   // The month visible in the calendar. Starts at the picked date, else the min/max, else today.
   const [view, setView] = useState(() => {
     const seed = parseISODate(value || min || max || toISODate(new Date()))
@@ -419,10 +423,17 @@ export function DateField({
   const minD = min ? parseISODate(min) : null
   const maxD = max ? parseISODate(max) : null
 
+  // Close only on clicks that land *outside* both the control and the popover. The panel is
+  // portaled to document.body, so it is not a descendant of rootRef — checking only rootRef
+  // treated every day/chevron click as "outside" and closed the calendar before the click
+  // could select anything.
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      const insideControl = rootRef.current?.contains(t) ?? false
+      const insidePanel = panelRef.current?.contains(t) ?? false
+      if (!insideControl && !insidePanel) setOpen(false)
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
@@ -433,23 +444,17 @@ export function DateField({
     const btn = buttonRef.current
     if (!btn) return
     const rect = btn.getBoundingClientRect()
-    const estHeight = 348
-    const spaceBelow = window.innerHeight - rect.bottom - 8
-    const up = spaceBelow < estHeight
-    setFlipUp(up)
-    setPos(
-      up
-        ? {
-            bottom: window.innerHeight - rect.top + 4,
-            left: Math.max(8, Math.min(rect.left, window.innerWidth - 264)),
-            width: 256,
-          }
-        : {
-            top: rect.bottom + 4,
-            left: Math.max(8, Math.min(rect.left, window.innerWidth - 264)),
-            width: 256,
-          }
-    )
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - 264))
+    const top = rect.bottom + 4
+    // Anchor the calendar just below the field; if it would collide with the bottom edge,
+    // nudge it up only as far as needed — never swap it above the card.
+    const panelHeight = 348
+    const overflow = rect.bottom + 4 + panelHeight - window.innerHeight
+    setPos({
+      top: overflow > 0 ? Math.max(8, top - overflow) : top,
+      left,
+      width: 256,
+    })
   }, [open])
 
   useEffect(() => {
@@ -498,14 +503,11 @@ export function DateField({
       }}
       style={{
         position: 'fixed',
-        top: flipUp ? undefined : (pos?.top ?? 0),
-        bottom: flipUp ? (pos?.bottom ?? 0) : undefined,
+        top: pos?.top ?? 0,
         left: pos?.left ?? 0,
         width: pos?.width ?? 256,
       }}
-      className={`select-popover fade-up z-[100] rounded-[10px] p-2.5 outline-none ${
-        flipUp ? 'mb-1.5' : 'mt-1.5'
-      }`}
+      className="select-popover fade-up z-[100] mt-1.5 rounded-[10px] p-2.5 outline-none"
     >
       <div className="mb-1 flex items-center justify-between">
         <button
