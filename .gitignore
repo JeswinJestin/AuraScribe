@@ -50,6 +50,17 @@ CLAUDE.local.md
 *.local.json
 .aider*
 .cursor/
+.agents/
+.codex/
+.github/hooks/
+skills-lock.json
+
+# Private contribution / research notes — my own process, not for the public repo
+docs/CONTRIBUTING-MALAYALAM.md
+docs/CONTRIB-indicconformer-sherpa-onnx.md
+docs/INDIC-CONFORMER.md
+docs/MALAYALAM-MODEL-SEARCH.md
+scripts/export_indicconformer_colab.ipynb
 
 # Local scratch
 scratchpad/
