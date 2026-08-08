@@ -6,11 +6,26 @@
 
 **Last updated:** 2026-08-08 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
-**Status — v0.4.1, multi-engine, installed and in daily use on Windows. Malayalam AND Kannada
-VERIFIED working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text
-at the cursor, 100% local. Five model tiers now cover English, ~40 Asian languages, 25 European
-languages, and Malayalam/Kannada — all fast, offline, free. Words/Snippets apply to dictation;
-cleanup, glass default, 5-step onboarding, overlay click-to-stop all shipped.
+**Status — v1.0.0 (first stable release), multi-engine, Windows. Malayalam AND Kannada VERIFIED
+working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text at the
+cursor, 100% local. Five model tiers cover English, ~40 Asian languages, 25 European languages, and
+Malayalam/Kannada — all fast, offline, free. Words/Snippets apply to dictation; cleanup, glass
+default, 5-step onboarding, overlay click-to-stop all shipped.
+
+**v1.0.0 changes (this milestone, see `docs/superpowers/specs/2026-08-08-v1-release-design.md`):**
+- **Recommended model** now elects **AuraScribe English (Moonshine base)** — the election in
+  `engine.rs` was speed-first (electing the fractionally-faster Mini); switched to accuracy-first,
+  tie-broken by fastest (`elect_recommended`, with tests).
+- **Dropdowns** — new accessible `Select` (`ui.tsx`) replaces the four native `<select>`s in
+  Settings; themed popover, keyboard nav, no OS-drawn list.
+- **History** — day-grouped headings, "Show more" pagination, a 6-month usage heatmap, and
+  date-range delete (`db.daily_counts` / `delete_transcripts_between` + commands + `HistoryView`).
+- **Cleanup** verified engine-agnostic (applied to the transcript string post-transcribe, no
+  per-engine branch) — runs for all five engines.
+- Injection "paste into terminal" report investigated: not reproducible (both typing and paste
+  paths verified landing in Claude Code); transient, no code defect found.
+- **Cross-platform:** macOS/Linux remain Windows-only for now — the honest plan (Linux via WSL2/VM;
+  macOS via CI + a cloud/borrowed Mac) is not yet implemented and must be verified on-target.
 
 **Open-source contribution (in progress):** Malayalam model published to HuggingFace
 (`jeswinjestin/sherpa-onnx-nemo-ctc-indicconformer-malayalam`, verified: model.onnx + tokens.txt +
