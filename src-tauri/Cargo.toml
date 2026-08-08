@@ -83,11 +83,13 @@ objc2-app-kit = "0.2"
 core-graphics = "0.24"
 
 [features]
-default = ["whisper"]
+# `moonshine` joined `default` at v1.0.0: the download + transcribe path is proven on real
+# machines (owner's daily use; Malayalam/Kannada mic-verified), and it powers the recommended
+# English model plus every multilingual engine — so the shipped installer must include it.
+default = ["whisper", "moonshine"]
 whisper = ["dep:whisper-rs"]
 
-# Moonshine engine (ONNX via sherpa-onnx). Opt-in until the download + transcribe path is
-# proven by a real transcript on a real machine; it will join `default` once verified.
+# Moonshine + the other sherpa-onnx engines (Parakeet, Dolphin, NeMo-CTC IndicConformer).
 moonshine = ["dep:sherpa-rs", "dep:sherpa-rs-sys"]
 
 # GPU backends. `use_gpu(true)` is requested unconditionally in asr.rs but is a no-op unless
