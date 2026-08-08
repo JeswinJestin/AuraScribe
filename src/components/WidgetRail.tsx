@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { Trash2, Loader2 } from 'lucide-react'
 import type { Settings, Status } from '@/lib/ipc'
 import * as ipc from '@/lib/ipc'
+import { DateField } from '@/components/ui'
 import type { View } from '@/components/Sidebar'
 
 /** One card in the contextual rail. */
@@ -76,28 +77,26 @@ function RangeDelete({ onDeleted }: { onDeleted: () => void }) {
       <div className="grid grid-cols-2 gap-2">
         <label className="flex flex-col gap-1">
           <span className="text-[11px] text-muted-foreground">From</span>
-          <input
-            type="date"
+          <DateField
+            aria-label="From date"
             value={from}
             max={to || undefined}
-            onChange={(e) => {
-              setFrom(e.target.value)
+            onChange={(iso) => {
+              setFrom(iso)
               setConfirming(false)
             }}
-            className="input w-full"
           />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-[11px] text-muted-foreground">To</span>
-          <input
-            type="date"
+          <DateField
+            aria-label="To date"
             value={to}
             min={from || undefined}
-            onChange={(e) => {
-              setTo(e.target.value)
+            onChange={(iso) => {
+              setTo(iso)
               setConfirming(false)
             }}
-            className="input w-full"
           />
         </label>
       </div>

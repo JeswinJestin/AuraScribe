@@ -73,6 +73,29 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### Round 31 (2026-08-08) — themed date picker replaces the broken native calendar
+
+Owner reinstalled round 30 and reported the History **"Delete a date range"** card showed no
+working calendar and misaligned M/D/Y segments (the WebView2 primitive `<input type="date">`
+draws an unstyled, empty control in-app). Fixed by building a real themed calendar:
+
+- **New `DateField` component (`ui.tsx`)** that draws its own popover calendar — closed it
+  reads exactly like `.input` (with a calendar glyph), open it is a `--popover` panel in
+  light/dark and a **frosted-glass** pane in Glass, matching the custom `Select` (portal into
+  `document.body`, fixed-position, flips up when tight). Now shows **`DD/MM/YYYY`**, with month
+  prev/next chevrons, weekday header, indigo selection, a ring on today, disabled days outside
+  the From/To range, Escape/click-outside to close, and screen-reader labels.
+- **`RangeDelete` (`WidgetRail.tsx`)** now uses `DateField` for From/To (grid-aligned, both
+  `w-full`) instead of the native date input. Validation (`from <= to`) is unchanged — the
+  values are still `YYYY-MM-DD`.
+- **Glass highlights** for the calendar day cells: frosted white hover, indigo pick
+  (`.date-cell` rules in `globals.css`), matching the dropdown/sidebar highlight language.
+- Verified: `tsc --noEmit` clean, 48 tests pass, installer rebuilt
+  (`--features moonshine --config src-tauri/tauri.moonshine.conf.json`,
+  `AuraScribe_1.0.0_x64-setup.exe`, ~8.8 MB). **Owner must reinstall** and re-check the From/To
+  calendar pickers in every appearance (Light/Dark/Glass) and confirm the DD/MM/YYYY alignment
+  in the rail card.
+
 ### Round 30 (2026-08-08) — owner feedback round 2 on the v1.0.0 build
 
 Owner inspected the round-29 build and flagged four things; all fixed and rebuilt:
