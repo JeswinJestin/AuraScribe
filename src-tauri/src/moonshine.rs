@@ -41,12 +41,12 @@ const MODEL_FILES: [&str; 5] = [
 /// Sizes are the sum of the five int8 files (English-only models today).
 const MOONSHINE_MODELS: &[(&str, &str, u64, u8, u8, f32)] = &[
     // (id, hf_variant, size_mb, speed(1=fastest), accuracy(5=best), cpu_cost estimate)
-    // `moonshine-base-en` is the English default (recommended). `moonshine-tiny-en` is kept as the
-    // genuinely-light option (110 MB vs 286 MB) — a smaller download for people who want the
-    // lightest install and are fine with slightly lower accuracy. (The Whisper `tiny.en`/`base`
-    // were removed — those were strictly worse; Moonshine tiny is still a fast, useful tier.)
-    ("moonshine-base-en", "base", 286, 1, 4, 0.15),
+    // `moonshine-tiny-en` ("AuraScribe English Mini") is listed first — the genuinely-light option
+    // (110 MB) that tops the model list. `moonshine-base-en` ("AuraScribe English") is the
+    // recommended English default (286 MB, accuracy 4) — the badge comes from `engine.rs`, and
+    // this ordering matches the Settings list the owner designed.
     ("moonshine-tiny-en", "tiny", 110, 1, 3, 0.10),
+    ("moonshine-base-en", "base", 286, 1, 4, 0.15),
 ];
 
 /// HuggingFace repo that hosts a model's five files flat (no archive to unpack).

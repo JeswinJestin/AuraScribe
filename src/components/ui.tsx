@@ -1,6 +1,7 @@
 'use client'
 
 import { AlertCircle, Check, ChevronDown } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 export function PageHeader({
@@ -161,6 +162,8 @@ export function Select({
 }) {
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null)
+  const [flipUp, setFlipUp] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
@@ -182,16 +185,45 @@ export function Select({
     return () => window.removeEventListener('mousedown', onDown)
   }, [open])
 
-  // On open, highlight the current value and move focus into the listbox for keyboard nav.
+  // On open, measure the button and wheel the popover into view using getBoundingClientRect.
+  // Positioning with fixed coords (instead of `absolute` inside the root) makes the popover a
+  // floating layer that is never clipped by the window's scroll containers — the listbox always
+  // reads as a panel on top of the glass card, matching the design system's layering.
   useEffect(() => {
     if (!open) return
     setActiveIndex(selectedIndex)
+    const btn = buttonRef.current
+    if (!btn) return
+    const rect = btn.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - 8
+    const estHeight = Math.min(288, options.length * 40 + 16)
+    const up = spaceBelow < estHeight
+    setFlipUp(up)
+    setPos(
+      up
+        ? {
+            bottom: window.innerHeight - rect.top + 4,
+            left: rect.left,
+            width: rect.width,
+          }
+        : {
+            top: rect.bottom + 4,
+            left: rect.left,
+            width: rect.width,
+          }
+    )
+  }, [open, selectedIndex, options.length])
+
+  // Keep focus inside the listbox for keyboard nav once it has mounted.
+  useEffect(() => {
+    if (!open) return
     const id = requestAnimationFrame(() => listRef.current?.focus())
     return () => cancelAnimationFrame(id)
-  }, [open, selectedIndex])
+  }, [open])
 
   const close = (returnFocus: boolean) => {
     setOpen(false)
+    setPos(null)
     if (returnFocus) buttonRef.current?.focus()
   }
 
@@ -254,6 +286,49 @@ export function Select({
     }
   }
 
+  const dropdown =
+    open && pos ? (
+      <ul
+        ref={listRef}
+        role="listbox"
+        tabIndex={-1}
+        aria-activedescendant={`${listId}-${activeIndex}`}
+        onKeyDown={onListKeyDown}
+        style={{
+          position: 'fixed',
+          top: flipUp ? undefined : (pos.top ?? 0),
+          bottom: flipUp ? (pos.bottom ?? 0) : undefined,
+          left: pos.left,
+          width: pos.width,
+          maxWidth: 'min(96vw, 420px)',
+        }}
+        className={`select-popover fade-up z-[100] max-h-72 overflow-auto rounded-[10px] p-1 outline-none ${
+          flipUp ? 'mb-1.5' : 'mt-1.5'
+        }`}
+      >
+        {options.map((opt, idx) => {
+          const isSelected = opt.value === value
+          const isActive = idx === activeIndex
+          return (
+            <li
+              key={opt.value}
+              id={`${listId}-${idx}`}
+              role="option"
+              aria-selected={isSelected}
+              onMouseEnter={() => setActiveIndex(idx)}
+              onClick={() => commit(idx)}
+              className={`flex cursor-pointer items-center justify-between gap-2 rounded-[7px] px-2.5 py-2 text-sm ${
+                isActive ? 'bg-accent' : ''
+              }`}
+            >
+              <span className="truncate">{opt.label}</span>
+              {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+            </li>
+          )
+        })}
+      </ul>
+    ) : null
+
   return (
     <div ref={rootRef} className={`relative ${className}`}>
       <button
@@ -272,37 +347,7 @@ export function Select({
         />
       </button>
 
-      {open && (
-        <ul
-          ref={listRef}
-          role="listbox"
-          tabIndex={-1}
-          aria-activedescendant={`${listId}-${activeIndex}`}
-          onKeyDown={onListKeyDown}
-          className="fade-up absolute z-50 mt-1.5 max-h-60 w-full overflow-auto rounded-[10px] border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
-        >
-          {options.map((opt, idx) => {
-            const isSelected = opt.value === value
-            const isActive = idx === activeIndex
-            return (
-              <li
-                key={opt.value}
-                id={`${listId}-${idx}`}
-                role="option"
-                aria-selected={isSelected}
-                onMouseEnter={() => setActiveIndex(idx)}
-                onClick={() => commit(idx)}
-                className={`flex cursor-pointer items-center justify-between gap-2 rounded-[7px] px-2.5 py-2 text-sm ${
-                  isActive ? 'bg-accent' : ''
-                }`}
-              >
-                <span className="truncate">{opt.label}</span>
-                {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-              </li>
-            )
-          })}
-        </ul>
-      )}
+      {open && pos && createPortal(dropdown, document.body)}
     </div>
   )
 }

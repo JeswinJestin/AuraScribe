@@ -73,6 +73,36 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### Round 29 (2026-08-08) — owner-verified UI fixes on the v1.0.0 build
+
+Owner ran the v1.0.0 installer and flagged real defects; all fixed and rebuilt:
+
+- **Model list order was wrong.** The user wants **AuraScribe English Mini first**, then
+  **AuraScribe English (286 MB)** with the **Recommended** badge on it for English. The
+  catalogue printed base-first. Fixed in `moonshine.rs`: `MOONSHINE_MODELS` now lists
+  `moonshine-tiny-en` ("English Mini") first, `moonshine-base-en` ("English") second;
+  the facade's `elect_recommended` (accuracy-first among real-time models) still pins the
+  badge on **`moonshine-base-en`** (accuracy 4 vs Mini's 3). Tests lock it.
+- **Custom `Select` popover (ui.tsx) was clipped and un-themeable.** It rendered as an
+  absolutely-positioned child of the control, so the window's `overflow-y-auto` content
+  column clipped it — it appeared *below* the card, half-hidden. Rewrote it to render through
+  a **portal into `document.body`** with `position: fixed` coords computed from the button's
+  `getBoundingClientRect()`, flipping **up** when there isn't enough room below. It now floats
+  as a **glass-morphism pane above the card** in Glass (frosted blur + translucent navy via
+  the new `.select-popover` / `.glass-bg .select-popover` rules in `globals.css`), and tracks
+  `--popover` tokens in light/dark.
+- **History layout.** The usage **heatmap now fills the full panel width** like GitHub's
+  graph (`HEATMAP_WEEKS` = 53, a full year) with month labels up top, weekday hints on the
+  left, per-day hover tooltips ("3 dictations on Thursday, 8 August 2026"), and the grid
+  measured to exactly fill the container. **Delete-a-date-range moved out of the main column
+  into a right-hand rail** of the History tab, per the owner's spec. The transcript day groups
+  ("Today" / "Yesterday" / dated) render to its left.
+- Version label in the Settings rail bumped v0.4.1 → **v1.0.0**.
+- Verified: 47 tests pass, `tsc --noEmit` + `next build` clean, installer rebuilt with
+  `--features moonshine` + the Moonshine bundle overlay (`AuraScribe_1.0.0_x64-setup.exe`,
+  ~8.8 MB). **Owner must reinstall** (PROCESS RULE: one install) and re-check: model list
+  order + badge, the open dropdown in every appearance, and the History heatmap/right rail.
+
 ### Round 28 (2026-08-08) — AuraScribe model branding; Whisper removed; contribution guide
 
 Post-Malayalam polish (owner requests):
