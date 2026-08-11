@@ -4,7 +4,7 @@
 > starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-08 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-09 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Status — v1.0.0 (first stable release), multi-engine, Windows. Malayalam AND Kannada VERIFIED
 working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text at the
@@ -72,6 +72,28 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### Round 33 (2026-08-09) — fix "VCRUNTIME140_1.dll not found" on fresh Windows PCs
+
+Friend installed `AuraScribe_1.0.0_x64-setup.exe` on a clean Windows machine; the app would not
+start: *"code execution cannot proceed because VCRUNTIME140_1.dll was not found. Reinstalling the
+program may fix this problem."* It is NOT a corrupt download — it is the missing **Microsoft Visual
+C++ Redistributable** (x64, VS 2015–2022). The dev machine has it (it ships with the VS Build
+Tools); a stock Windows install does not.
+
+- **Root cause.** `aurascribe.exe` imports `MSVCP140.dll`; `onnxruntime.dll` imports
+  `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `MSVCP140.dll`. All three live in the VC++ runtime, not
+  in Windows itself. Verified with `dumpbin /DEPENDENTS` on the release exe and every bundled DLL.
+- **Fix.** Ship the three runtime DLLs **app-locally** next to the exe (allowed under Microsoft's
+  redistributable license — they are copied from the VS `VC\Redist\MSVC\...\x64\Microsoft.VC143.CRT`
+  folder). Added `runtime/vcruntime140.dll`, `runtime/vcruntime140_1.dll`, `runtime/msvcp140.dll`
+  to `bundle.resources` in **both** `tauri.conf.json` and `tauri.moonshine.conf.json`. Windows
+  resolves them from the exe's own directory before System32, so a clean PC needs nothing installed.
+- **Verified.** Rebuilt with `moonshine-build.bat`; extracted the new installer with 7-Zip — all
+  three runtime DLLs sit beside `aurascribe.exe`. The unpacked exe launches cleanly (exit code 0,
+  no `0xC0000135` loader error).
+- **To ship:** give the friend the **new** `AuraScribe_1.0.0_x64-setup.exe`. The old installer (built
+  before this fix) will keep failing on machines without the redistributable.
 
 ### Round 32 (2026-08-08) — DateField calendar could not select; calendar anchored per request
 

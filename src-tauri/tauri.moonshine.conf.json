@@ -5,7 +5,10 @@
       "target/release/onnxruntime.dll": "onnxruntime.dll",
       "target/release/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
       "target/release/sherpa-onnx-c-api.dll": "sherpa-onnx-c-api.dll",
-      "target/release/sherpa-onnx-cxx-api.dll": "sherpa-onnx-cxx-api.dll"
+      "target/release/sherpa-onnx-cxx-api.dll": "sherpa-onnx-cxx-api.dll",
+      "runtime/vcruntime140.dll": "vcruntime140.dll",
+      "runtime/vcruntime140_1.dll": "vcruntime140_1.dll",
+      "runtime/msvcp140.dll": "msvcp140.dll"
     }
   }
 }
