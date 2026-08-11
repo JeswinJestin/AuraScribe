@@ -5,7 +5,24 @@
 Press a hotkey, speak, and clean text appears at your cursor in any app — a browser, an editor, a
 terminal, a chat box. Nothing leaves your machine: no cloud, no account, no telemetry. This is the
 first release we're calling **stable** — the engines, the languages, and the everyday flow are all
-proven in daily use.
+proven in daily use, and it's the first build verified to install and run on a **second, clean
+Windows PC**.
+
+---
+
+## 🛠️ The fix that makes this the one to install
+
+**Earlier builds (v0.4.x and before) could fail to start on a fresh Windows PC** with:
+
+> *"The code execution cannot proceed because VCRUNTIME140_1.dll was not found."*
+
+That wasn't a corrupt download — those builds silently depended on the **Microsoft Visual C++
+Redistributable** being already installed (it is, on a developer's machine; it often isn't on a
+stock Windows install). **v1.0.0 fixes this:** the required runtime is now bundled with the app, so
+it launches on any Windows 10/11 machine with **nothing extra to install and no internet needed to
+start**.
+
+Those earlier versions were **previews, not stable releases** — use v1.0.0.
 
 ---
 

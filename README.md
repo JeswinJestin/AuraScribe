@@ -2,9 +2,14 @@
 
 Free, open-source, local-first voice dictation. Press a hotkey, speak, and clean punctuated text appears at your cursor in any app — no account, no subscription, no cloud.
 
-![AuraScribe](https://img.shields.io/badge/version-0.3.0-blue)
+![AuraScribe](https://img.shields.io/badge/version-1.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+
+> **v1.0.0 is the first stable release.** It's the first build verified to install and run on a
+> clean Windows PC — earlier versions (v0.4.x and before) were **previews** and could fail to launch
+> on a fresh machine with a *"VCRUNTIME140_1.dll was not found"* error. That's fixed in 1.0.0 (the
+> Visual C++ runtime is now bundled). If you're on an older version, update.
 
 ## ⬇️ Download (Windows)
 
@@ -22,9 +27,9 @@ That's it. The app lives in the system tray; close the window and it keeps runni
 
 ## ✨ Features
 
-- 🎤 **On-device transcription** — Whisper.cpp runs locally; audio never leaves your machine
-- ✨ **Automatic cleanup, on by default** — strips filler words, fixes punctuation and sentence casing, all locally
-- ⌨️ **Global hotkey** — push-to-talk or toggle mode, rebindable
+- 🎤 **On-device transcription** — five engines (Moonshine, NVIDIA Parakeet, Dolphin, AI4Bharat IndicConformer, Whisper) run locally; audio never leaves your machine. English, 25 European languages, ~40 Asian languages, and Malayalam/Kannada.
+- ✨ **Automatic cleanup, on by default** — strips filler words, fixes punctuation and sentence casing, all locally, on every engine
+- ⌨️ **Global hotkey** — Ctrl+Shift+Space, push-to-talk or toggle mode
 - 📋 **Types at your cursor** — text is injected into whatever app has focus
 - 🔕 **Lives in the tray** — no persistent window; icon shows idle / listening / processing
 - 🆓 **Free forever** — no tiers, no word caps, no account, no telemetry
