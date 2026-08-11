@@ -27,8 +27,9 @@ That's it. The app lives in the system tray; close the window and it keeps runni
 
 ## ✨ Features
 
-- 🎤 **On-device transcription** — five engines (Moonshine, NVIDIA Parakeet, Dolphin, AI4Bharat IndicConformer, Whisper) run locally; audio never leaves your machine. English, 25 European languages, ~40 Asian languages, and Malayalam/Kannada.
+- 🎤 **On-device transcription** — four speech engines run locally via sherpa-onnx: **Moonshine** (English), **NVIDIA Parakeet** (25 European languages), **Dolphin** (~40 Asian languages), and **AI4Bharat IndicConformer** (Malayalam/Kannada). Audio never leaves your machine.
 - ✨ **Automatic cleanup, on by default** — strips filler words, fixes punctuation and sentence casing, all locally, on every engine
+- 🗂️ **History** — day-grouped, with a usage heatmap and date-range delete, stored only on your device
 - ⌨️ **Global hotkey** — Ctrl+Shift+Space, push-to-talk or toggle mode
 - 📋 **Types at your cursor** — text is injected into whatever app has focus
 - 🔕 **Lives in the tray** — no persistent window; icon shows idle / listening / processing
@@ -38,9 +39,9 @@ That's it. The app lives in the system tray; close the window and it keeps runni
 
 This is the whole story, and it's checkable in the source:
 
-- Audio is transcribed **on-device** by Whisper.cpp. It is never uploaded.
+- Audio is transcribed **on-device** by the local speech engines (sherpa-onnx: Moonshine, Parakeet, Dolphin, IndicConformer). It is never uploaded.
 - The cleanup pass is **plain local string processing** ([`cleanup.rs`](src-tauri/src/cleanup.rs)) — not an LLM, not a network call.
-- **The only network request the app ever makes is downloading a Whisper model** from HuggingFace, once, when you choose one.
+- **The only network request the app ever makes is downloading a model** from HuggingFace, once, when you choose one.
 - No telemetry, no analytics, no crash reporting.
 
 After the model is downloaded, dictation works fully offline — you can verify by turning off Wi-Fi.
@@ -104,7 +105,7 @@ Cleaned text is typed at your cursor. That's the whole flow.
 
 - **Frontend**: Next.js 14 + React 18 + TypeScript (settings window and recording overlay only)
 - **Backend**: Tauri 2 + Rust
-- **Transcription**: Whisper.cpp via `whisper-rs`, running in-process
+- **Transcription**: sherpa-onnx engines (Moonshine, Parakeet, Dolphin, IndicConformer) via `sherpa-rs`, running in-process. whisper.cpp (`whisper-rs`) is still compiled in as an internal fallback, but ships with no models.
 - **Audio capture**: `cpal`
 - **Storage**: local SQLite via `sqlx`
 
@@ -115,7 +116,12 @@ aurascribe/
 ├── src-tauri/               # Rust backend
 │   ├── migrations/          # SQLite schema
 │   └── src/
-│       ├── asr.rs           # Whisper.cpp integration
+│       ├── engine.rs        # Engine facade — routes to the right speech engine
+│       ├── moonshine.rs     # Moonshine (English) via sherpa-onnx
+│       ├── parakeet.rs      # Parakeet (European) + custom transducer bundles
+│       ├── dolphin.rs       # Dolphin (~40 Asian languages)
+│       ├── nemo_ctc.rs      # IndicConformer (Malayalam/Kannada)
+│       ├── asr.rs           # Whisper fallback engine (no models shipped)
 │       ├── cleanup.rs       # Local text cleanup pass
 │       ├── audio.rs         # Audio capture + resampling
 │       ├── hotkey.rs        # Global hotkey registration
@@ -133,18 +139,16 @@ aurascribe/
 Downloaded once, then used entirely offline. Stored under your local app data directory,
 in `AuraScribe/models/`.
 
-All of these run faster than real time on a CPU, so dictation never leaves you waiting. There
-are two engines: **Moonshine** (fast, English, the default) and **Whisper** (`tiny.en`, kept as
-the smallest fallback).
+All of these run faster than real time on a CPU, so dictation never leaves you waiting. Four
+engines cover different language families, all via sherpa-onnx:
 
 | Model | Engine | Size | Language | Speed (CPU) | Role |
 |-------|--------|------|----------|-------------|------|
 | `moonshine-base-en` | Moonshine | ~286 MB | English | ~0.1× | **recommended** |
 | `moonshine-tiny-en` | Moonshine | ~110 MB | English | ~0.1× | lightest install |
-| `dolphin-base-multilang` | Dolphin | ~105 MB | ~40 Asian langs incl. Hindi/Tamil/Telugu/Bengali (auto-detect) | ~0.3× | Indian languages |
+| `dolphin-base-multilang` | Dolphin | ~105 MB | ~40 Asian langs incl. Hindi/Tamil/Telugu/Bengali (auto-detect) | ~0.3× | Asian languages |
 | `parakeet-v3-multilingual` | Parakeet | ~671 MB | 25 European langs (auto-detect) | ~0.5× | European languages |
-| `indicconformer-ml` / `-kn` | NeMo-CTC | ~494 MB | **Malayalam** / **Kannada** (AI4Bharat IndicConformer) | ~0.6× | accurate Malayalam/Kannada |
-| `small` | Whisper | ~466 MB | **All 99 languages** incl. Malayalam, Kannada, Arabic (pick your language) | ~1.5× (slower) | widest coverage |
+| `indicconformer-ml` / `-kn` | IndicConformer | ~494 MB | **Malayalam** / **Kannada** (AI4Bharat) | ~0.6× | accurate Malayalam/Kannada |
 
 **Bring your own model.** Drop any sherpa-onnx transducer bundle (encoder/decoder/joiner + tokens)
 into `AuraScribe/models/<name>/` and it appears in the list automatically — 100% local. This is how
@@ -153,18 +157,20 @@ into `AuraScribe/models/<name>/` and it appears in the list automatically — 10
 Colab to produce the bundle, then drop it in. See [docs/INDIC-CONFORMER.md](docs/INDIC-CONFORMER.md).
 No cloud, ever.
 
-**Removed:** the Whisper `base.en`/`base`, `tiny.en`, and `moonshine-tiny-en` models — on any
-machine that runs `moonshine-base-en` (same ~0.1× speed class) they were strictly less accurate,
-so they only invited a worse result. The `large-v3` family was removed earlier for being far too
-slow on a CPU; it can return behind a GPU build (`build-vulkan.bat`).
+**Why no Whisper models?** Earlier versions shipped Whisper (`tiny.en`/`base.en`/`small`), but the
+sherpa-onnx engines above beat them: Moonshine is faster *and* more accurate on English, and Dolphin
+/ Parakeet / IndicConformer cover the other languages far faster than Whisper's all-99 `small` model
+could on a CPU. So the Whisper catalogue is now empty — the engine stays only as an internal code
+fallback. (Large GPU-class models can return behind a GPU build, `build-vulkan.bat`.)
 
 ## 🐛 Troubleshooting
 
 **Model won't download**
 
-Download the `ggml-<model>.bin` file manually from
-[HuggingFace](https://huggingface.co/ggerganov/whisper.cpp/tree/main) and place it in the
-`AuraScribe/models/` folder under your local app data directory.
+Models download from HuggingFace the first time you use one. If a download fails, check your
+connection and retry from **Settings → Voice model**. Everything is stored under `AuraScribe/models/`
+in your local app-data directory; you can also drop a compatible sherpa-onnx model folder there
+manually (see *Bring your own model* above).
 
 **Audio not working**
 
@@ -195,12 +201,30 @@ explicit error rather than silently doing nothing. Contributions welcome.
 
 MIT — see [LICENSE](LICENSE).
 
+## ❤️ Support AuraScribe
+
+AuraScribe is free and always will be — no tiers, no caps, no account. If it saves you time and
+you'd like to support its development, you can sponsor me on GitHub:
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/JeswinJestin)
+
+Sponsorships fund maintenance and new features (cross-platform support is next). Thank you 🙏
+
 ## 🙏 Acknowledgments
 
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — high-performance Whisper inference
-- [whisper-rs](https://github.com/tazz4843/whisper-rs) — Rust bindings
-- [Tauri](https://tauri.app/) — desktop framework
-- [Next.js](https://nextjs.org/) — React framework
+AuraScribe packages excellent open speech models and runs them locally — full credit to their
+authors, used under their respective licenses:
+
+- **[Moonshine](https://github.com/usefulsensors/moonshine)** (Useful Sensors) — the fast English engine
+- **[NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)** — 25 European languages
+- **[Dolphin](https://github.com/DataoceanAI/Dolphin)** (DataoceanAI / Tsinghua) — ~40 Asian languages
+- **[AI4Bharat IndicConformer](https://github.com/AI4Bharat/IndicConformerASR)** — Malayalam & Kannada (CC-BY-4.0)
+- **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)** (k2-fsa) — the offline inference runtime that runs them all, with model exports by [@csukuangfj](https://huggingface.co/csukuangfj)
+
+And the tooling that makes the app:
+
+- [Tauri](https://tauri.app/) — desktop framework · [Next.js](https://nextjs.org/) — React framework
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) / [whisper-rs](https://github.com/tazz4843/whisper-rs) — the internal fallback engine (compiled in; no models shipped)
 
 ## 📞 Support
 
