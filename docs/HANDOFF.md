@@ -4,7 +4,7 @@
 > starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-09 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-12 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Status — v1.0.0 (first stable release), multi-engine, Windows. Malayalam AND Kannada VERIFIED
 working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text at the
@@ -72,6 +72,37 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### Round 34 (2026-08-11/12) — v1.0.0 shipped + published; SEO, sponsors, PDF, landing page
+
+The release-and-market session. All on `master` (merged from the feature branch, fast-forward).
+
+- **v1.0.0 published to GitHub.** Merged to `master`, tagged `v1.0.0`, created the release (marked
+  Latest) with the fixed `AuraScribe_1.0.0_x64-setup.exe` (8.6 MB, MSVC runtime bundled). The three
+  older releases (`v0.4.1`, `v0.4.0`, `v0.3.0`) were relabeled **Pre-release** with a warning
+  pointing to v1.0.0 (they could fail to launch on a clean PC).
+- **Release-build footgun fixed.** `build.bat` used the base config (no onnxruntime DLLs) — now
+  moonshine is a **default feature** and `build.bat` uses the moonshine config, so it can't produce
+  a broken installer. The correct release build bundles sherpa-onnx + ONNX Runtime + the 3 MSVC
+  runtime DLLs next to the exe.
+- **Recommendation logic corrected (owner's fix, verified):** the accuracy-first rule would have
+  elected the multilingual Parakeet (accuracy 5) as the English default; changed to **English-first,
+  most-accurate, tie-broken by fastest** so it lands on AuraScribe English (Moonshine base). Locked
+  with tests (48 pass).
+- **README modernized + SEO.** Dropped stale Whisper claims (Whisper ships no models — the four
+  sherpa-onnx engines do the work), corrected privacy/architecture/models/troubleshooting, added an
+  honest **comparison vs Wispr Flow / Superwhisper / Windows Voice Typing / Dragon**, keyword
+  positioning, and expanded acknowledgments. Repo **About** description + 20 discovery topics set via
+  `gh repo edit` (incl. `wispr-flow-alternative`, `voice-dictation`, `offline-speech-recognition`).
+- **Sponsors.** `.github/FUNDING.yml` → GitHub Sponsors (`JeswinJestin`) + Buy Me a Coffee
+  (`jes.weee`); README Support section + badges.
+- **Product/technical PDF** (for the owner's interviews): a 11-page `AuraScribe_Product_and_
+  Technical_Overview.pdf` on the owner's **Desktop** (generator script in the session scratchpad).
+  **Never pushed to GitHub** (owner's explicit request).
+- **NEW sibling project: the marketing landing page** at **`../aurascribe-landing`** (Next.js 14,
+  its own repo/deploy to Vercel). v1 built and verified; the storytelling/awwwards scroll redesign is
+  planned. See **`../aurascribe-landing/docs/HANDOFF.md`** — it is the source of truth for the site.
+- Still Windows-only; macOS/Linux remain the honest WSL2/VM + cloud-Mac plan, not yet implemented.
 
 ### Round 33 (2026-08-09) — fix "VCRUNTIME140_1.dll not found" on fresh Windows PCs
 
