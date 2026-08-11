@@ -1,6 +1,6 @@
 # AuraScribe
 
-Free, open-source, local-first voice dictation. Press a hotkey, speak, and clean punctuated text appears at your cursor in any app — no account, no subscription, no cloud.
+**Free, open-source, 100% offline voice dictation for Windows** — a private, local alternative to Wispr Flow, Superwhisper, and Dragon. Press a hotkey, speak, and clean punctuated text appears at your cursor in any app. No account, no subscription, no cloud.
 
 ![AuraScribe](https://img.shields.io/badge/version-1.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -34,6 +34,28 @@ That's it. The app lives in the system tray; close the window and it keeps runni
 - 📋 **Types at your cursor** — text is injected into whatever app has focus
 - 🔕 **Lives in the tray** — no persistent window; icon shows idle / listening / processing
 - 🆓 **Free forever** — no tiers, no word caps, no account, no telemetry
+
+## 🆚 A free, open-source alternative to Wispr Flow, Superwhisper & Dragon
+
+Looking for a **free, open-source, offline alternative to Wispr Flow, Superwhisper, Dragon
+NaturallySpeaking, or Windows Voice Typing (Win+H)**? That's exactly what AuraScribe is. Most voice
+dictation tools are a paid subscription, cloud-based, closed-source, or send your audio to someone
+else's servers. AuraScribe is none of those — it runs entirely on your PC, for free, forever.
+
+| | **AuraScribe** | Wispr Flow | Superwhisper | Windows Voice Typing | Dragon |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Price | **Free forever** | Subscription | Paid | Free | Paid ($$$) |
+| Open source | **✅** | ❌ | ❌ | ❌ | ❌ |
+| Runs offline (no cloud) | **✅** | ❌ | ✅ | ❌ (sends to Microsoft) | ✅ |
+| No account required | **✅** | ❌ | ✅ | ❌ | ✅ |
+| Types into any app | **✅** | ✅ | ✅ | ✅ | ✅ |
+| Platform | Windows | Mac/Win | macOS | Windows | Windows |
+
+On top of that, AuraScribe covers **Indian languages most tools ignore** — accurate, on-device
+**Malayalam and Kannada** dictation (via AI4Bharat IndicConformer), plus 25 European and ~40 Asian
+languages. Your voice never leaves the machine.
+
+<sub>*Also searched as: free voice dictation, open source speech to text, offline dictation for Windows, local speech recognition, private voice typing, voice to text app, Wispr Flow alternative, Superwhisper alternative, Dragon alternative, Windows Voice Typing alternative.*</sub>
 
 ## 🔒 Privacy
 
