@@ -99,9 +99,11 @@ The release-and-market session. All on `master` (merged from the feature branch,
 - **Product/technical PDF** (for the owner's interviews): a 11-page `AuraScribe_Product_and_
   Technical_Overview.pdf` on the owner's **Desktop** (generator script in the session scratchpad).
   **Never pushed to GitHub** (owner's explicit request).
-- **NEW sibling project: the marketing landing page** at **`../aurascribe-landing`** (Next.js 14,
-  its own repo/deploy to Vercel). v1 built and verified; the storytelling/awwwards scroll redesign is
-  planned. See **`../aurascribe-landing/docs/HANDOFF.md`** — it is the source of truth for the site.
+- **Sibling project: the marketing landing page** at **`../aurascribe-landing`** (Next.js 14 + GSAP +
+  Lenis, its own deploy to Vercel). It has been rebuilt into an **editorial cream/dark-chamber design**
+  (EB Garamond + Figtree, indigo accent, scroll-driven colour transitions, a language wheel, SEO pass,
+  contact form). **See `../aurascribe-landing/docs/HANDOFF.md` and its CLAUDE.md — those are the source
+  of truth for the site**; the earlier "awwwards frame-sequence" idea was abandoned. Not yet deployed.
 - Still Windows-only; macOS/Linux remain the honest WSL2/VM + cloud-Mac plan, not yet implemented.
 
 ### Round 33 (2026-08-09) — fix "VCRUNTIME140_1.dll not found" on fresh Windows PCs
