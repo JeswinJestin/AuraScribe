@@ -334,6 +334,98 @@ impl Database {
                 .await?;
         Ok(result.rows_affected())
     }
+
+    // ---- Streaks (Insights) ----
+
+    /// Per-local-day word data for the streak engine: the set of days (as `NaiveDate` ordinals)
+    /// that reached `min_words`, today's ordinal, and today's running word count. Word counts use
+    /// the same whitespace split as `stats()` for consistency. Today's date is computed by SQLite
+    /// so its day boundary matches the `localtime` grouping exactly.
+    pub async fn streak_day_data(&self, min_words: i64) -> Result<StreakDayData, sqlx::Error> {
+        use chrono::Datelike;
+        use std::collections::HashMap;
+
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT date(timestamp, 'unixepoch', 'localtime') AS day,
+                    COALESCE(cleaned_text, raw_text) AS text
+             FROM transcripts",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let today_str: String = sqlx::query_scalar("SELECT date('now', 'localtime')")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let mut per_day: HashMap<String, i64> = HashMap::new();
+        for (day, text) in &rows {
+            *per_day.entry(day.clone()).or_insert(0) += text.split_whitespace().count() as i64;
+        }
+
+        let to_ord = |s: &str| -> Option<i64> {
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .ok()
+                .map(|d| d.num_days_from_ce() as i64)
+        };
+
+        let counted: Vec<i64> = per_day
+            .iter()
+            .filter(|(_, &w)| w >= min_words)
+            .filter_map(|(day, _)| to_ord(day))
+            .collect();
+
+        Ok(StreakDayData {
+            counted,
+            today_ordinal: to_ord(&today_str).unwrap_or(0),
+            words_today: per_day.get(&today_str).copied().unwrap_or(0),
+        })
+    }
+
+    pub async fn load_streak_state(&self) -> Result<StreakStateRow, sqlx::Error> {
+        sqlx::query_as::<_, StreakStateRow>("SELECT * FROM streak_state WHERE id = 1")
+            .fetch_one(&self.pool)
+            .await
+    }
+
+    pub async fn save_streak_state(&self, s: &StreakStateRow) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE streak_state SET
+                current_streak = $1, longest_streak = $2, freezes = $3,
+                earn_progress = $4, last_reconciled_day = $5, backfilled = $6
+             WHERE id = 1",
+        )
+        .bind(s.current_streak)
+        .bind(s.longest_streak)
+        .bind(s.freezes)
+        .bind(s.earn_progress)
+        .bind(s.last_reconciled_day)
+        .bind(s.backfilled)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// Raw per-day word data used to drive the streak engine (`streaks.rs`).
+pub struct StreakDayData {
+    /// Ordinals (`NaiveDate::num_days_from_ce`) of local days that reached the word threshold.
+    pub counted: Vec<i64>,
+    pub today_ordinal: i64,
+    pub words_today: i64,
+}
+
+/// The persisted singleton streak row (see migration 007). `backfilled`/booleans are stored as
+/// integers, matching the rest of this schema.
+#[derive(sqlx::FromRow, Clone, Debug)]
+pub struct StreakStateRow {
+    // `id` (always 1) is intentionally not mapped — sqlx `FromRow` ignores unselected columns, and
+    // we only ever write `WHERE id = 1`. Omitting it keeps the struct warning-clean.
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    pub freezes: i64,
+    pub earn_progress: i64,
+    pub last_reconciled_day: Option<i64>,
+    pub backfilled: i64,
 }
 
 /// One row of the usage heatmap: a local calendar day and how many dictations landed on it.

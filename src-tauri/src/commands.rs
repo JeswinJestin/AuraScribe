@@ -881,6 +881,54 @@ pub async fn get_stats(state: tauri::State<'_, AppState>) -> Result<crate::db::U
     db.stats().await.map_err(|e| e.to_string())
 }
 
+/// The dictation streak + freeze economy for the Insights page. Reconciles on every read (cheap and
+/// idempotent within a day), which is what makes the streak self-healing across app restarts and
+/// missed days without needing a background job — see `streaks.rs` and the design spec.
+#[command]
+pub async fn get_streak_state(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::streaks::StreakInfo, String> {
+    use crate::streaks::{StreakState, MIN_WORDS_PER_DAY};
+    use std::collections::BTreeSet;
+
+    let db = state.db.lock().await;
+    let day_data = db
+        .streak_day_data(MIN_WORDS_PER_DAY)
+        .await
+        .map_err(|e| e.to_string())?;
+    let row = db.load_streak_state().await.map_err(|e| e.to_string())?;
+
+    let prior = StreakState {
+        current_streak: row.current_streak,
+        longest_streak: row.longest_streak,
+        freezes: row.freezes,
+        earn_progress: row.earn_progress,
+        last_reconciled_day: row.last_reconciled_day,
+        backfilled: row.backfilled != 0,
+    };
+
+    let counted: BTreeSet<i64> = day_data.counted.iter().copied().collect();
+    let next = prior.reconcile(&counted, day_data.today_ordinal);
+
+    // Only write when the finalized state actually changed, so a plain read costs no DB write.
+    if next != prior {
+        let updated = crate::db::StreakStateRow {
+            current_streak: next.current_streak,
+            longest_streak: next.longest_streak,
+            freezes: next.freezes,
+            earn_progress: next.earn_progress,
+            last_reconciled_day: next.last_reconciled_day,
+            backfilled: next.backfilled as i64,
+        };
+        db.save_streak_state(&updated)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let today_counted = counted.contains(&day_data.today_ordinal);
+    Ok(next.to_info(today_counted, day_data.words_today))
+}
+
 // ---- System ----
 
 #[command]

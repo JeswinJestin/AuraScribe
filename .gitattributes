@@ -1,0 +1,6 @@
+# sqlx checksums every migration file's bytes at compile time and stores the checksum in each
+# user's database. If a migration's line endings drift (e.g. CRLF under core.autocrlf=true), a
+# rebuilt app rejects its own DB at startup with "migration N was previously applied but has been
+# modified" and refuses to launch. All released builds shipped these files as LF, so pin them to LF
+# regardless of the machine's autocrlf setting. NEVER let a migration flip to CRLF.
+src-tauri/migrations/*.sql text eol=lf

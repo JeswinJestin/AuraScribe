@@ -1,7 +1,9 @@
 'use client'
 
-import { Mic, History, BookMarked, Scissors, BarChart3, Settings2 } from 'lucide-react'
-import type { Status } from '@/lib/ipc'
+import { useEffect, useState } from 'react'
+import { Mic, History, BookMarked, Scissors, BarChart3, Settings2, Flame } from 'lucide-react'
+import * as ipc from '@/lib/ipc'
+import type { Status, StreakInfo } from '@/lib/ipc'
 
 export type View = 'dictate' | 'history' | 'dictionary' | 'snippets' | 'insights' | 'settings'
 
@@ -44,6 +46,27 @@ export function Sidebar({
     ? { label: 'Ready', color: 'bg-primary' }
     : { label: 'Needs a model', color: 'bg-muted-foreground/40' }
 
+  // Glanceable streak in the status rail. Re-read on navigation and when a dictation ends
+  // (is_recording flips false) so it reflects the latest without a manual refresh. Silently
+  // absent outside Tauri (browser preview) — it is an overlay, never load-bearing.
+  const [streak, setStreak] = useState<StreakInfo | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const load = () =>
+      ipc
+        .getStreakState()
+        .then((s) => {
+          if (!cancelled) setStreak(s)
+        })
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 10_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [view, status.is_recording])
+
   // Fixed icon slot so collapsing changes width and hides labels only — icons never shift.
   const slot = 'flex w-[22px] shrink-0 items-center justify-center'
 
@@ -84,22 +107,51 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="mt-2 flex items-center gap-2 border-t pl-1 pt-3">
-        <span className={slot}>
-          <span className={`h-1.5 w-1.5 rounded-full ${state.color}`} title={state.label} />
-        </span>
-        {!collapsed && (
-          <span className="truncate text-[12px] text-muted-foreground">
-            {state.label}
-            {status.loaded_model && (
-              <>
-                {' '}
-                <span className="mono" style={{ color: 'hsl(var(--faint))' }}>
-                  · {status.loaded_model}
-                </span>
-              </>
-            )}
+      <div className="mt-2 border-t pt-3">
+        <div className="flex items-center gap-2 pl-1">
+          <span className={slot}>
+            <span className={`h-1.5 w-1.5 rounded-full ${state.color}`} title={state.label} />
           </span>
+          {!collapsed && (
+            <span className="truncate text-[12px] text-muted-foreground">
+              {state.label}
+              {status.loaded_model && (
+                <>
+                  {' '}
+                  <span className="mono" style={{ color: 'hsl(var(--faint))' }}>
+                    · {status.loaded_model}
+                  </span>
+                </>
+              )}
+            </span>
+          )}
+        </div>
+
+        {streak && streak.streak > 0 && (
+          <div
+            className="mt-2 flex items-center gap-2 pl-1"
+            title={`${streak.streak} day streak${streak.today_counted ? '' : ' — dictate 25 words to keep it today'}`}
+          >
+            <span className={slot}>
+              <Flame
+                className="h-[15px] w-[15px]"
+                strokeWidth={2}
+                color={streak.today_counted ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))'}
+              />
+            </span>
+            {!collapsed ? (
+              <span className="text-[12px] text-muted-foreground">
+                <span className="mono tnum" style={{ color: 'hsl(var(--foreground))' }}>
+                  {streak.streak}
+                </span>{' '}
+                day streak
+              </span>
+            ) : (
+              <span className="mono tnum text-[11px]" style={{ color: 'hsl(var(--foreground))' }}>
+                {streak.streak}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </aside>

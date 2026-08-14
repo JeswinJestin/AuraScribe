@@ -21,6 +21,7 @@ mod dolphin;
 mod nemo_ctc;
 mod overlay;
 mod sound;
+mod streaks;
 mod system;
 mod tray;
 
@@ -257,6 +258,7 @@ fn main() {
             commands::transcript_daily_counts,
             commands::delete_transcripts_between,
             commands::get_stats,
+            commands::get_streak_state,
             commands::list_audio_devices,
             commands::set_start_at_login,
             commands::open_settings_folder,

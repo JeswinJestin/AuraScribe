@@ -4,7 +4,7 @@
 > starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
 > file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-12 &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-14 (Insights streaks Stage 1 shipped) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Status — v1.0.0 (first stable release), multi-engine, Windows. Malayalam AND Kannada VERIFIED
 working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text at the
@@ -72,6 +72,57 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### Round 35 (2026-08-14) — Insights streaks + freezes + milestones (Project A, Stage 1)
+
+First feature of the post-v1 roadmap (order: **A streaks → C prompt-optimization → B macOS/Linux**).
+Design spec: `docs/superpowers/specs/2026-08-13-insights-streaks-recap-design.md`. Stage 1 only —
+Stage 2 (yearly "Your Year" recap + local PNG share cards, recap prominent only Dec 1–Jan 31) is
+designed in the spec but NOT built yet.
+
+**What shipped (all local, no new data collected, no cloud):**
+- **Streak engine — `src-tauri/src/streaks.rs`** (pure integer logic, 13 unit tests). Rules: a day
+  counts at **≥25 words** (local day); **1 freeze per 10 consecutive counted days, cap 5**; a missed
+  day auto-spends one freeze (one per missed day) else the streak resets; `longest_streak` survives
+  resets. First launch **backfills current/longest from real history**; freezes start at 0 and accrue
+  forward. `reconcile()` finalizes only whole days before today, so it is idempotent and safe to run
+  on every read (today is a live bonus, never breaks the streak until it is over).
+- **Persistence — migration `007_streaks.sql`** (singleton `streak_state` row: current, longest,
+  freezes, earn_progress, last_reconciled_day ordinal, backfilled).
+- **DB — `db.rs`**: `streak_day_data()` (per-local-day word sums via the same whitespace split as
+  `stats()`, today's date from SQLite so day boundaries match), `load/save_streak_state()`.
+- **Command — `get_streak_state`** (`commands.rs`, registered in `main.rs`, `mod streaks;`), reconciles
+  on read and only writes when the finalized state changed. IPC: `getStreakState()` + `StreakInfo` in
+  `src/lib/ipc.ts`.
+- **UI:** `InsightsView.tsx` gets a **StreakCard** (current streak + flame, longest, 5 freeze pips,
+  today's `words/25` progress) and a **Milestones** strip (7/30/100/365-day, 10k/100k/1M words, 10h/100h
+  saved; earned chips lit, a plain "new" tag on newly-crossed ones via localStorage — no motion, per
+  the instrument aesthetic). `Sidebar.tsx` status rail shows a glanceable flame + day count (cyan when
+  today is safe, muted when at-risk), re-read on nav / when a dictation ends. Colour = state throughout.
+- **Verified for real:** 61/61 cargo tests, `tsc` clean, full `npm run build` clean (produced the NSIS
+  installer). Against the owner's ACTUAL db (271 dictations, 10 days): **current streak 10, longest 10,
+  today counts (915 words)** — and because today makes 10 consecutive days, finalizing tonight earns
+  freeze #1. Owner should reinstall to see it in-app (PROCESS RULE: one install).
+
+**Crash fixed post-build (CRLF migration checksum — READ THIS, it can bite again):** the first rebuilt
+installer crashed on EVERY launch — `migration 6 was previously applied but has been modified` — dying
+inside `Database::new()` before the window shows (log stops right after "Logging to..."). Root cause was
+NOT the streak code: `006_onboarding.sql` had drifted to **CRLF** in the working tree while every other
+migration + the checksum stored in the owner's DB (from the original LF release) is **LF**. sqlx hashes
+each migration's exact bytes, so the mismatched checksum made it refuse the DB. `core.autocrlf=true` and
+there was **no `.gitattributes`**. Fix: reconverted `006` to LF (sha384 now matches the DB's stored v6
+byte-for-byte) and added **`.gitattributes`** pinning `src-tauri/migrations/*.sql text eol=lf` so a
+migration can never flip to CRLF again (that would silently brick every existing user on the next
+rebuild). Verified by RUNNING the rebuilt release exe: log now reaches "Database initialized" + model
+auto-load, and all 7 migrations show success=1 in `_sqlx_migrations` with the `streak_state` table
+present. **Lesson: never let a migration's line endings change after release; the `.gitattributes` now
+enforces it.** The owner must reinstall the freshly-rebuilt installer (elevated) to replace the broken
+Program Files copy.
+
+**Next:** Project C (prompt-optimization engine) — decided direction is an OPTIONAL, separately-
+downloaded small/fast local instruct model (persona/context/task/format system prompt); app stays
+4.6 MB by default, feature only works if the model is downloaded. Needs its own research + spec before
+any code. Then Stage 2 of Insights, then Project B (macOS/Linux).
 
 ### Round 34 (2026-08-11/12) — v1.0.0 shipped + published; SEO, sponsors, PDF, landing page
 

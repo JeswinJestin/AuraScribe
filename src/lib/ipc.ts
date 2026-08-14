@@ -61,6 +61,19 @@ export interface UsageStats {
   active_days: number
 }
 
+export interface StreakInfo {
+  /** Current streak, including today if it already crossed the daily word threshold. */
+  streak: number
+  longest: number
+  freezes: number
+  max_freezes: number
+  /** Counted days still needed to bank the next freeze; 0 when the bank is full. */
+  days_to_next_freeze: number
+  today_counted: boolean
+  words_today: number
+  min_words_per_day: number
+}
+
 export interface DictionaryEntry {
   id: number
   word: string
@@ -192,6 +205,10 @@ export async function deleteTranscriptsBetween(start: number, end: number): Prom
 
 export async function getStats(): Promise<UsageStats> {
   return invoke('get_stats')
+}
+
+export async function getStreakState(): Promise<StreakInfo> {
+  return invoke('get_streak_state')
 }
 
 // System
