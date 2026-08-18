@@ -5,9 +5,11 @@
 Before doing anything in this repo, read:
 
 1. **`docs/HANDOFF.md`** — what this project is, what actually works, what's next
-2. **`docs/ARCHITECTURE.md`** — how it's built and why
-3. **`docs/DESIGN.md`** — the visual system; read before touching any UI
-4. **`docs/MAINTAINING-DOCS.md`** — how to keep the above current
+2. **`docs/PROJECT-JOURNAL.md`** — the journey: every major experiment, decision, and dead end,
+   so you don't re-run one. Read it to understand *how we got here*.
+3. **`docs/ARCHITECTURE.md`** — how it's built and why
+4. **`docs/DESIGN.md`** — the visual system; read before touching any UI
+5. **`docs/MAINTAINING-DOCS.md`** — how to keep the above current
 
 Then verify reality: run `cargo check --manifest-path src-tauri/Cargo.toml` and check
 `git status`. The docs describe the last known good state; the tree may have moved.
@@ -17,6 +19,13 @@ Then verify reality: run `cargo check --manifest-path src-tauri/Cargo.toml` and 
 **At the end of every task that changes the project, update `docs/HANDOFF.md` before
 finishing your turn.** Bump its "Last updated" date. See `docs/MAINTAINING-DOCS.md` for
 what goes where.
+
+**And for any MAJOR change, also append a dated entry to `docs/PROJECT-JOURNAL.md`.** Major =
+a feature shipped, a release cut, an experiment run (success *or* failure), an architecture or
+product decision, a reverted change, or a significant bug root-caused. Record it honestly —
+especially the dead ends and *why* they failed — so the path is never re-walked. HANDOFF is the
+current state; the journal is the story of how we got there. Small/cosmetic changes don't need a
+journal entry; use judgement. Do not ask permission — it is part of finishing the work.
 
 This is not optional bookkeeping. Chat context gets discarded; this folder is the only
 memory that survives into the next session. Do not ask permission — it is part of finishing

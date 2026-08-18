@@ -404,6 +404,89 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    /// Aggregate stats for the "Your Year" recap, scoped to a local calendar year. Everything is
+    /// computed from existing transcript history — nothing new is collected, nothing leaves the box.
+    pub async fn year_recap(&self, year: i32) -> Result<YearRecap, sqlx::Error> {
+        use std::collections::HashMap;
+
+        let rows = sqlx::query_as::<_, (String, Option<String>, i64, String)>(
+            "SELECT date(timestamp, 'unixepoch', 'localtime') AS day,
+                    app_name,
+                    audio_ms,
+                    COALESCE(cleaned_text, raw_text) AS text
+             FROM transcripts
+             WHERE strftime('%Y', timestamp, 'unixepoch', 'localtime') = $1",
+        )
+        .bind(format!("{year:04}"))
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut total_words = 0i64;
+        let mut total_audio_ms = 0i64;
+        let mut per_day: HashMap<String, i64> = HashMap::new();
+        let mut per_app: HashMap<String, i64> = HashMap::new();
+        for (day, app, audio_ms, text) in &rows {
+            let w = text.split_whitespace().count() as i64;
+            total_words += w;
+            total_audio_ms += audio_ms;
+            *per_day.entry(day.clone()).or_insert(0) += w;
+            if let Some(a) = app.as_deref().filter(|a| !a.is_empty()) {
+                *per_app.entry(a.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        let (busiest_day, busiest_day_words) = per_day
+            .iter()
+            .max_by_key(|(_, &w)| w)
+            .map(|(d, &w)| (Some(d.clone()), w))
+            .unwrap_or((None, 0));
+        let (top_app, top_app_dictations) = per_app
+            .iter()
+            .max_by_key(|(_, &c)| c)
+            .map(|(a, &c)| (Some(a.clone()), c))
+            .unwrap_or((None, 0));
+
+        let spoken_minutes = total_audio_ms as f64 / 60_000.0;
+        let typed_minutes = total_words as f64 / 40.0; // 40 wpm typing baseline
+        let hours_saved = (typed_minutes - spoken_minutes).max(0.0) / 60.0;
+        let words_per_minute = if total_audio_ms > 0 {
+            (total_words as f64 / spoken_minutes.max(f64::MIN_POSITIVE)).round() as i64
+        } else {
+            0
+        };
+
+        Ok(YearRecap {
+            year,
+            total_words,
+            total_dictations: rows.len() as i64,
+            active_days: per_day.len() as i64,
+            hours_spoken: spoken_minutes / 60.0,
+            hours_saved,
+            words_per_minute,
+            busiest_day,
+            busiest_day_words,
+            top_app,
+            top_app_dictations,
+        })
+    }
+}
+
+/// The "Your Year" recap (Insights, Stage 2). All fields derive from local transcript history.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct YearRecap {
+    pub year: i32,
+    pub total_words: i64,
+    pub total_dictations: i64,
+    pub active_days: i64,
+    pub hours_spoken: f64,
+    pub hours_saved: f64,
+    pub words_per_minute: i64,
+    /// Local `YYYY-MM-DD` of the day with the most words, if any.
+    pub busiest_day: Option<String>,
+    pub busiest_day_words: i64,
+    pub top_app: Option<String>,
+    pub top_app_dictations: i64,
 }
 
 /// Raw per-day word data used to drive the streak engine (`streaks.rs`).

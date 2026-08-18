@@ -12,6 +12,7 @@ import { HistoryView } from '@/components/views/HistoryView'
 import { DictionaryView } from '@/components/views/DictionaryView'
 import { SnippetsView } from '@/components/views/SnippetsView'
 import { InsightsView } from '@/components/views/InsightsView'
+import { RecapView } from '@/components/views/RecapView'
 import { SettingsView } from '@/components/views/SettingsView'
 import { Onboarding } from '@/components/Onboarding'
 
@@ -240,7 +241,8 @@ export default function App() {
               {view === 'history' && <HistoryView reloadToken={historyReloadToken} />}
               {view === 'dictionary' && <DictionaryView />}
               {view === 'snippets' && <SnippetsView />}
-              {view === 'insights' && <InsightsView />}
+              {view === 'insights' && <InsightsView onOpenRecap={() => setView('recap')} />}
+              {view === 'recap' && <RecapView onBack={() => setView('insights')} />}
               {view === 'settings' && (
                 <SettingsView settings={settings} status={status} onSaveSettings={saveSettings} />
               )}

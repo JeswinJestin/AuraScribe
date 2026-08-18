@@ -259,6 +259,8 @@ fn main() {
             commands::delete_transcripts_between,
             commands::get_stats,
             commands::get_streak_state,
+            commands::get_year_recap,
+            commands::save_share_image,
             commands::list_audio_devices,
             commands::set_start_at_login,
             commands::open_settings_folder,

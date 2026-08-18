@@ -247,6 +247,19 @@ export function WidgetRail({
         </Widget>
       </>
     ),
+    recap: (
+      <>
+        <Widget title="Your year, privately">
+          <Body>
+            Built entirely from your on-device history. Nothing here is uploaded or shared —
+            it&apos;s yours alone.
+          </Body>
+        </Widget>
+        <Widget title="Tip">
+          <Body>Keep your daily streak going and this recap only gets better.</Body>
+        </Widget>
+      </>
+    ),
     settings: (
       <>
         <Widget title="Privacy">
@@ -256,7 +269,7 @@ export function WidgetRail({
           <Stat value={model} sub="running on this device" />
         </Widget>
         <Widget title="Version">
-          <Body>AuraScribe v1.1.0 · Windows</Body>
+          <Body>AuraScribe v1.2.0 · Windows</Body>
         </Widget>
       </>
     ),

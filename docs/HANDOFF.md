@@ -1,10 +1,27 @@
 # AuraScribe — Project Handoff
 
 > **This is the single source of truth for project state.** If you are an AI assistant
-> starting a fresh session, read this file first, then `docs/ARCHITECTURE.md`. Update this
-> file at the end of every task — see `docs/MAINTAINING-DOCS.md` for the rules.
+> starting a fresh session, read this file first, then `docs/PROJECT-JOURNAL.md` (the journey /
+> every experiment tried) and `docs/ARCHITECTURE.md`. Update this file at the end of every task —
+> and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
+> `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-14 (Insights streaks Stage 1 shipped) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-14 (v1.2.0 shipped — Insights recap + share cards; chunking experiment reverted; journal added) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+
+**Insights Stage 2 — shipped as v1.2.0:** the **yearly "Your Year" recap** (`year_recap` +
+`RecapView`, reachable from Insights year-round, own sidebar entry Dec–Jan) and **shareable PNG cards**
+(`lib/shareCard.ts` canvas → `save_share_image` command → Pictures folder, dependency-free, nothing
+uploaded). Recap numbers verified against the real DB; tsc + 61 tests + moonshine build clean. The
+card *visual* + save are cosmetic/additive (can't break dictation) — owner should glance in-app.
+Streak-card share button deferred as an easy follow-up.
+
+**Since Round 35:** **v1.1.0 released** (streaks + migration LF fix; correct 8.6 MB DLL-bundled
+installer — a `npm run build` 4.9 MB build that omitted the DLLs was caught and discarded). A
+**NeMo-CTC short-chunk experiment FAILED and was reverted** — the IndicConformer model degrades on
+long inputs *and* fragments on short ones, so chunking can't fix it; Malayalam/Kannada are robust
+only on short, clear, pure-Malayalam speech, and the real fix is a **better multilingual Indic model
+(v2)**. The **sherpa docs PR #847 should be closed honestly** for the same reason. Full narrative +
+all experiments now live in **`docs/PROJECT-JOURNAL.md`**.
 
 **Status — v1.0.0 (first stable release), multi-engine, Windows. Malayalam AND Kannada VERIFIED
 working by the owner's real mic tests.** AuraScribe presses a hotkey → speaks → clean text at the

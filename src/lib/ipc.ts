@@ -211,6 +211,29 @@ export async function getStreakState(): Promise<StreakInfo> {
   return invoke('get_streak_state')
 }
 
+export interface YearRecap {
+  year: number
+  total_words: number
+  total_dictations: number
+  active_days: number
+  hours_spoken: number
+  hours_saved: number
+  words_per_minute: number
+  busiest_day: string | null
+  busiest_day_words: number
+  top_app: string | null
+  top_app_dictations: number
+}
+
+export async function getYearRecap(year?: number): Promise<YearRecap> {
+  return invoke('get_year_recap', { year: year ?? null })
+}
+
+/** Save a rendered PNG card to the user's Pictures folder (revealed in Explorer). Returns the path. */
+export async function saveShareImage(name: string, bytes: number[]): Promise<string> {
+  return invoke('save_share_image', { name, bytes })
+}
+
 // System
 export async function setStartAtLogin(enabled: boolean): Promise<void> {
   return invoke('set_start_at_login', { enabled })

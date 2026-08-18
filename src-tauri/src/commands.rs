@@ -929,6 +929,50 @@ pub async fn get_streak_state(
     Ok(next.to_info(today_counted, day_data.words_today))
 }
 
+/// The "Your Year" recap for the Insights page. `year` defaults to the current local year; the
+/// frontend passes an explicit year (e.g. last year in January, when that recap is the interesting one).
+#[command]
+pub async fn get_year_recap(
+    state: tauri::State<'_, AppState>,
+    year: Option<i32>,
+) -> Result<crate::db::YearRecap, String> {
+    use chrono::Datelike;
+    let year = year.unwrap_or_else(|| chrono::Local::now().year());
+    let db = state.db.lock().await;
+    db.year_recap(year).await.map_err(|e| e.to_string())
+}
+
+/// Save a shareable PNG (a streak or recap card rendered on the frontend canvas) to the user's
+/// Pictures folder and reveal it in Explorer. Stays dependency-free — no dialog/fs plugin — and the
+/// image never leaves the machine; the user chooses whether to share the file. Returns the path.
+#[command]
+pub async fn save_share_image(name: String, bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.is_empty() {
+        return Err("nothing to save".into());
+    }
+    let dir = dirs::picture_dir()
+        .or_else(dirs::desktop_dir)
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // Sanitise the filename to a safe stem.
+    let stem: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "aurascribe-share" } else { stem };
+    let file = dir.join(format!("{stem}.png"));
+    std::fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&file)
+            .spawn();
+    }
+    Ok(file.display().to_string())
+}
+
 // ---- System ----
 
 #[command]

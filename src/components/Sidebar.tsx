@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Mic, History, BookMarked, Scissors, BarChart3, Settings2, Flame } from 'lucide-react'
+import { Mic, History, BookMarked, Scissors, BarChart3, Settings2, Flame, Sparkles } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { Status, StreakInfo } from '@/lib/ipc'
 
-export type View = 'dictate' | 'history' | 'dictionary' | 'snippets' | 'insights' | 'settings'
+export type View = 'dictate' | 'history' | 'dictionary' | 'snippets' | 'insights' | 'recap' | 'settings'
 
 const NAV: { id: View; label: string; icon: typeof Mic }[] = [
   { id: 'dictate', label: 'Dictate', icon: Mic },
@@ -15,6 +15,18 @@ const NAV: { id: View; label: string; icon: typeof Mic }[] = [
   { id: 'insights', label: 'Insights', icon: BarChart3 },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ]
+
+/** The yearly recap gets its own prominent sidebar entry only around year-end (Dec–Jan), then
+ *  recedes; the rest of the year it's still reachable from the Insights page. */
+function navItems(): { id: View; label: string; icon: typeof Mic }[] {
+  const month = new Date().getMonth()
+  const recapSeason = month === 11 || month === 0
+  if (!recapSeason) return NAV
+  const items = [...NAV]
+  const i = items.findIndex((n) => n.id === 'insights')
+  items.splice(i + 1, 0, { id: 'recap', label: 'Your Year', icon: Sparkles })
+  return items
+}
 
 /** Three rising bars — the AuraScribe mark. */
 function Wordmark() {
@@ -84,7 +96,7 @@ export function Sidebar({
       </div>
 
       <nav className="flex flex-1 flex-col gap-1.5">
-        {NAV.map(({ id, label, icon: Icon }) => {
+        {navItems().map(({ id, label, icon: Icon }) => {
           const active = view === id
           return (
             <button

@@ -5,6 +5,7 @@ import { Flame, Snowflake } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { UsageStats, StreakInfo } from '@/lib/ipc'
 import { PageHeader, Stat, EmptyState, ErrorNote } from '@/components/ui'
+import { recapYear } from '@/components/views/RecapView'
 
 /** Typing 40 wpm is a common average; the gap against speaking is the time saved. */
 const TYPING_WPM = 40
@@ -148,7 +149,7 @@ function Milestones({ items }: { items: Milestone[] }) {
   )
 }
 
-export function InsightsView() {
+export function InsightsView({ onOpenRecap }: { onOpenRecap?: () => void }) {
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [streak, setStreak] = useState<StreakInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -228,6 +229,23 @@ export function InsightsView() {
       <div className="mt-4">
         <Milestones items={milestones} />
       </div>
+
+      {onOpenRecap && (
+        <button
+          onClick={onOpenRecap}
+          className="mt-4 flex w-full items-center justify-between rounded-[14px] border bg-card p-5 text-left transition-colors hover:border-[hsl(var(--primary))]"
+        >
+          <div>
+            <div className="text-[13px] font-medium">Your {recapYear()} in review</div>
+            <div className="mt-0.5 text-[12px]" style={{ color: 'hsl(var(--faint))' }}>
+              Hours saved, words, your busiest day — a yearly recap.
+            </div>
+          </div>
+          <span aria-hidden className="text-muted-foreground">
+            →
+          </span>
+        </button>
+      )}
 
       <p className="mt-3 text-xs text-muted-foreground">
         Counted from your local history. Nothing here is uploaded or shared.
