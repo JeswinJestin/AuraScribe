@@ -164,29 +164,15 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # sherpa-rs-sys copies its runtime DLLs (onnxruntime + sherpa-onnx c/cxx api) into
-      # target/release ONLY while its build script runs. On a WARM Swatinem cache the crate isn't
-      # recompiled, so those loose top-level DLLs are pruned from the cache while Tauri's build.rs
-      # resource check still demands them — the exact "sherpa-onnx-cxx-api.dll doesn't exist" failure.
-      # The libs survive under target/release/deps and build/*/out, so restore them before bundling.
-      # (On a cold cache nothing is found here and the build produces them itself — a harmless no-op.)
-      - name: Restore sherpa runtime DLLs (Windows, cache-safe)
-        if: runner.os == 'Windows'
+      # sherpa-rs-sys copies its runtime shared libs (onnxruntime + sherpa-onnx c/cxx api) into
+      # target ONLY while its build script runs. On a WARM Swatinem cache the crate isn't recompiled
+      # AND the cache pruned those libs entirely — so they exist nowhere, breaking BOTH the Windows
+      # resource check (`sherpa-onnx-cxx-api.dll doesn't exist`) and the macOS lib embedding. Force
+      # just this one crate to rebuild so its build script re-emits the libs. It only re-extracts a
+      # prebuilt binary (~30-60s), not a from-source compile, so the cache still pays off elsewhere.
+      - name: Force sherpa runtime libs to be re-emitted (cache-safe)
         shell: bash
-        run: |
-          set -euo pipefail
-          dest="src-tauri/target/release"
-          mkdir -p "$dest"
-          for dll in onnxruntime.dll onnxruntime_providers_shared.dll sherpa-onnx-c-api.dll sherpa-onnx-cxx-api.dll; do
-            if [ ! -f "$dest/$dll" ]; then
-              found="$(find src-tauri/target -name "$dll" -type f 2>/dev/null | head -n1 || true)"
-              if [ -n "$found" ]; then
-                cp -f "$found" "$dest/$dll"; echo "restored $dll from $found"
-              else
-                echo "no cached $dll yet — a cold build will produce it"
-              fi
-            fi
-          done
+        run: cargo clean -p sherpa-rs-sys --release --manifest-path src-tauri/Cargo.toml || true
 
       # `tauri build` runs `next build` (beforeBuildCommand) for the frontend, then compiles the
       # Rust and bundles the native installer(s) for this OS.
