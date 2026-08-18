@@ -19,6 +19,10 @@ tauri = { version = "2", features = [
     "tray-icon",
     # Image::from_bytes, used to swap the tray icon between idle/listening/processing
     "image-png",
+    # The overlay pill uses `.transparent(true)`, which on macOS is gated behind the private API
+    # (Windows/Linux need no feature). No-op on those platforms. Not App-Store-safe, which is fine
+    # for a self-distributed GitHub release. Also set app.macOSPrivateApi=true in tauri.conf.json.
+    "macos-private-api",
 ] }
 
 # Tauri plugins

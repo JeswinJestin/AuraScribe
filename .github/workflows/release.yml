@@ -41,6 +41,10 @@ env:
   CARGO_BUILD_JOBS: '4'
   CMAKE_BUILD_PARALLEL_LEVEL: '4'
   RUST_BACKTRACE: '1'
+  # linuxdeploy/appimagetool mount themselves via FUSE, which GitHub's Linux runners don't provide,
+  # so AppImage bundling fails with "failed to run linuxdeploy". This makes them extract-and-run
+  # instead of mounting — the standard CI workaround.
+  APPIMAGE_EXTRACT_AND_RUN: '1'
 
 jobs:
   # -----------------------------------------------------------------------------------------
@@ -172,6 +176,10 @@ jobs:
             echo "### ${{ matrix.name }} — produced bundles"
             echo '```'
             find src-tauri/target -path '*/bundle/*' -type f 2>/dev/null | sort || true
+            echo '```'
+            echo "Shared libs (onnxruntime / sherpa) that need bundling next to the binary:"
+            echo '```'
+            find src-tauri/target -maxdepth 3 \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) 2>/dev/null | sort || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
