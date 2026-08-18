@@ -207,11 +207,20 @@ jobs:
           if [ ! -d "$app" ]; then echo "::warning::no .app produced — skipping"; exit 0; fi
           fw="$app/Contents/Frameworks"
           mkdir -p "$fw"
+          # Search the WHOLE release tree, not just the top level: on a warm Rust cache sherpa-rs-sys
+          # isn't recompiled, so its dylibs live only under deps/ and build/*/out (same root cause as
+          # the Windows DLL restore). Prune the bundle dir so we don't recurse into the .app itself,
+          # then embed one copy per unique basename. (bash 3.2 on the runner — no associative arrays.)
+          all_libs="$(find src-tauri/target/release -path '*/bundle' -prune -o -name '*.dylib' -type f -print)"
           count=0
-          while IFS= read -r lib; do
-            cp -f "$lib" "$fw/"; count=$((count+1)); echo "embedded $(basename "$lib")"
-          done < <(find src-tauri/target/release -maxdepth 1 -name '*.dylib' -type f)
+          for base in $(printf '%s\n' "$all_libs" | xargs -n1 basename 2>/dev/null | sort -u); do
+            [ -z "$base" ] && continue
+            src="$(printf '%s\n' "$all_libs" | grep "/$base$" | head -n1)"
+            [ -z "$src" ] && continue
+            cp -f "$src" "$fw/"; count=$((count+1)); echo "embedded $base  (from $src)"
+          done
           echo "embedded $count dylib(s) into Contents/Frameworks"
+          if [ "$count" -eq 0 ]; then echo "::error::no dylibs found to embed — the dmg would not load models"; exit 1; fi
           # Ad-hoc signature (identity "-") so an unsigned build is allowed to run on Apple Silicon.
           codesign --force --deep --sign - "$app" || echo "::warning::codesign failed (non-fatal)"
           # Rebuild the dmg from the patched, signed .app so the shipped dmg actually contains the libs.
