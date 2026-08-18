@@ -359,3 +359,50 @@ not one-shot.
 
 Release notes updated: macOS/Linux are **🧪 Beta** (newly implemented, needs testing) with the
 setup caveats, not "doesn't dictate." Tracked as an open task.
+
+### 2026-08-18 (later) — v2.0.0: the three CI failures, root-caused and fixed
+
+The `v1.3.0` tag push was the first real cross-platform compile+bundle. Result from run
+`32144218157`: **macOS ✅, Windows ❌, Linux ❌** (an earlier run had Windows ✅/Mac ❌, which was the
+first sign the failures were environmental, not code). Read the actual logs; each failure was distinct.
+
+**Windows — the sneaky one: a warm-cache regression, not a code change.** Error:
+`resource path target\release\sherpa-onnx-cxx-api.dll doesn't exist`. Windows had built green one run
+earlier. The difference was the **Rust cache**: `sherpa-rs-sys` copies its runtime DLLs into
+`target/release` *only when its build script runs*. On a warm `Swatinem/rust-cache` hit the crate is
+not recompiled, and the cache prunes loose top-level artifacts — so the DLLs disappear while Tauri's
+`build.rs` resource check still requires them. Confirmed against the crate's own `build.rs` (v0.6.8):
+it copies the libs to `target_dir`, `target_dir/deps`, and `build/*/out`; the latter two survive the
+cache. **Fix:** a cache-safe restore step that copies the four DLLs back into `target/release` before
+bundling (no-op on a cold build). *Lesson: a build that embeds build-script-copied artifacts as static
+resources is cache-fragile — restore them explicitly.*
+
+**Linux — AppImage, not the app.** The Rust + `.deb` built fine; only AppImage failed
+(`failed to run linuxdeploy`). GitHub runners have no FUSE, and `APPIMAGE_EXTRACT_AND_RUN=1` wasn't
+enough because linuxdeploy also couldn't resolve the loose sherpa/onnx `.so` libs. **Decision:** drop
+AppImage from CI (`--bundles deb`) rather than keep fighting the toolchain; `.deb` covers Debian/Ubuntu
+desktops, which is the realistic Linux audience here. AppImage can return once the `.so` bundling is
+solved.
+
+**macOS — green but not self-contained (the deeper issue).** It produced a `.dmg`, but the app could
+never load a model, because **`sherpa-rs-sys` adds no desktop rpath** (its build.rs only rpaths mobile
+targets — verified at ~line 575) and Tauri doesn't place the dylibs in the `.app`. **Fix, two parts:**
+(1) our own `src-tauri/build.rs` now emits rpath link args — macOS `@executable_path/../Frameworks`,
+Linux `$ORIGIN` — no-op on Windows; (2) a macOS CI step embeds every `*.dylib` into
+`Contents/Frameworks`, **ad-hoc signs** the bundle (so an unsigned build can even launch on Apple
+Silicon), and **repacks the `.dmg`** from the patched app via `hdiutil`.
+
+**Version → v2.0.0.** First release that builds and ships Windows + macOS + Linux, with the full
+dictation loop present on all three (`enigo`/`arboard` injection + Tauri global hotkey, confirmed by
+audit). That's a major-version milestone. Bumped across `package.json` / `Cargo.toml` / `Cargo.lock` /
+`tauri.conf.json`; `cargo check` clean.
+
+**New `docs/INSTALL.md`** — per-OS steps, with the macOS Gatekeeper answer front and centre: Open
+Anyway via **Privacy & Security**, or `xattr -dr com.apple.quarantine /Applications/AuraScribe.app`
+(required on Sequoia 15+), plus the Accessibility / Microphone / Input Monitoring grants.
+
+**What remains genuinely unverified:** whether the embedded `.dylib`/`.so` actually *load* on
+macOS/Linux — untestable from a Windows box. The rpath + Frameworks embedding is the standard recipe,
+but the dylibs' `install_name`s might still need an `install_name_tool` fixup. The next signal is the
+owner tagging `v2.0.0` and running the artifacts on real hardware; `aurascribe.log` will name any
+missing library. Honest label kept: macOS/Linux are previews until a model load is confirmed on-device.

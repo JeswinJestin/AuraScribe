@@ -64,7 +64,7 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
               --title "AuraScribe $TAG" \
-              --notes $'Draft release.\n\n**Windows** is the proven, supported build.\n\n**macOS / Linux are EXPERIMENTAL previews** (see docs/HANDOFF.md, 2026-08-18): they install and launch, but do not yet dictate into other apps — text injection and the global hotkey are not implemented off Windows. Review the attached assets, decide how to label the non-Windows builds, then publish.'
+              --notes $'Draft release.\n\n**Windows (.exe)** is the proven, fully-supported build.\n\n**macOS (.dmg, Apple Silicon)** and **Linux (.deb)** are cross-platform previews: dictation logic (global hotkey, keystroke/clipboard injection) is now implemented on all three OSes. The macOS build embeds the sherpa/ONNX libraries and is ad-hoc signed. macOS installation needs the Gatekeeper steps in docs/INSTALL.md (the app is not notarized). Model loading on macOS/Linux still needs on-device verification — review the assets, test, then publish.'
             echo "Created draft release $TAG."
           fi
 
@@ -98,9 +98,12 @@ jobs:
               src-tauri/target/release/bundle/dmg/*.dmg
           - name: Linux (x64)
             os: ubuntu-latest
-            tauri_args: '--features moonshine'
+            # .deb only. The AppImage path relies on linuxdeploy, which needs FUSE that GitHub's
+            # runners don't provide; even with APPIMAGE_EXTRACT_AND_RUN it fails to resolve the loose
+            # sherpa/onnx .so libs, so it is dropped from CI until the packaging is stabilised. The
+            # .deb builds reliably and installs on Debian/Ubuntu (the common desktop case).
+            tauri_args: '--features moonshine --bundles deb'
             artifacts: |
-              src-tauri/target/release/bundle/appimage/*.AppImage
               src-tauri/target/release/bundle/deb/*.deb
 
     runs-on: ${{ matrix.os }}
@@ -161,10 +164,67 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # sherpa-rs-sys copies its runtime DLLs (onnxruntime + sherpa-onnx c/cxx api) into
+      # target/release ONLY while its build script runs. On a WARM Swatinem cache the crate isn't
+      # recompiled, so those loose top-level DLLs are pruned from the cache while Tauri's build.rs
+      # resource check still demands them — the exact "sherpa-onnx-cxx-api.dll doesn't exist" failure.
+      # The libs survive under target/release/deps and build/*/out, so restore them before bundling.
+      # (On a cold cache nothing is found here and the build produces them itself — a harmless no-op.)
+      - name: Restore sherpa runtime DLLs (Windows, cache-safe)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="src-tauri/target/release"
+          mkdir -p "$dest"
+          for dll in onnxruntime.dll onnxruntime_providers_shared.dll sherpa-onnx-c-api.dll sherpa-onnx-cxx-api.dll; do
+            if [ ! -f "$dest/$dll" ]; then
+              found="$(find src-tauri/target -name "$dll" -type f 2>/dev/null | head -n1 || true)"
+              if [ -n "$found" ]; then
+                cp -f "$found" "$dest/$dll"; echo "restored $dll from $found"
+              else
+                echo "no cached $dll yet — a cold build will produce it"
+              fi
+            fi
+          done
+
       # `tauri build` runs `next build` (beforeBuildCommand) for the frontend, then compiles the
       # Rust and bundles the native installer(s) for this OS.
       - name: Build the app bundle
         run: npx tauri build ${{ matrix.tauri_args }}
+
+      # macOS: Tauri does not place the sherpa/onnxruntime dylibs inside the .app, and (with our
+      # build.rs rpath = @executable_path/../Frameworks) the binary looks in Contents/Frameworks for
+      # them. Embed every produced dylib there, ad-hoc codesign the bundle so Gatekeeper will launch
+      # an unsigned build on Apple Silicon at all, then rebuild the .dmg (with the familiar drag-to-
+      # Applications layout) from the patched .app. BEST-EFFORT — model loading needs a real-Mac test.
+      - name: Embed sherpa libs, ad-hoc sign, repack dmg (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/release/bundle/macos/AuraScribe.app"
+          if [ ! -d "$app" ]; then echo "::warning::no .app produced — skipping"; exit 0; fi
+          fw="$app/Contents/Frameworks"
+          mkdir -p "$fw"
+          count=0
+          while IFS= read -r lib; do
+            cp -f "$lib" "$fw/"; count=$((count+1)); echo "embedded $(basename "$lib")"
+          done < <(find src-tauri/target/release -maxdepth 1 -name '*.dylib' -type f)
+          echo "embedded $count dylib(s) into Contents/Frameworks"
+          # Ad-hoc signature (identity "-") so an unsigned build is allowed to run on Apple Silicon.
+          codesign --force --deep --sign - "$app" || echo "::warning::codesign failed (non-fatal)"
+          # Rebuild the dmg from the patched, signed .app so the shipped dmg actually contains the libs.
+          ver="$(node -p "require('./package.json').version")"
+          out="src-tauri/target/release/bundle/dmg"
+          staging="$(mktemp -d)"
+          mkdir -p "$out"
+          rm -f "$out"/*.dmg
+          cp -R "$app" "$staging/"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname "AuraScribe" -srcfolder "$staging" -ov -format UDZO \
+            "$out/AuraScribe_${ver}_aarch64.dmg"
+          echo "repacked dmg:"; ls -la "$out"
 
       # Show exactly what this OS produced, in the run summary — useful while macOS/Linux
       # bundling is still being dialed in.

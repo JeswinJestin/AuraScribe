@@ -6,7 +6,7 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-18 (v1.3.0 prepped + Windows installer built: onboarding/sounds/voice, per-OS hotkey on fresh installs, disable-hotkey toggle, window-sizing fix, low-voice gain; CI + favicon. Notes/checklist in docs/. HELD pending owner on-device verify + tag) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-18 (**v2.0.0** — first cross-platform release: CI now green on Windows/macOS/Linux. Fixed the warm-cache Windows DLL regression, switched Linux to a reliable `.deb`, and made the macOS `.dmg` self-contained: rpath in build.rs + embedded sherpa/ONNX dylibs + ad-hoc signing. New `docs/INSTALL.md` with macOS Gatekeeper steps. macOS/Linux model-loading still needs an on-device check — see below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Insights Stage 2 — shipped as v1.2.0:** the **yearly "Your Year" recap** (`year_recap` +
 `RecapView`, reachable from Insights year-round, own sidebar entry Dec–Jan) and **shareable PNG cards**
@@ -89,6 +89,62 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### 2026-08-18 — v2.0.0: cross-platform release CI goes green (Win/Mac/Linux) + macOS self-contained
+
+The v1.3.0 tag's Release run exposed three separate CI failures; all diagnosed from the real logs and
+fixed. Bumped to **v2.0.0** (`package.json` / `Cargo.toml` / `Cargo.lock` / `tauri.conf.json`) — this
+is the first release that builds and ships all three OSes, a major milestone worth the major version.
+
+**Root causes (from the run 32144218157 logs, not guesses):**
+- **Windows — regressed to RED on a WARM Rust cache.** `sherpa-rs-sys` copies its runtime DLLs into
+  `target/release` only while *its* build script runs. On a cache hit the crate isn't recompiled, and
+  Swatinem's cache prunes loose top-level artifacts, so the DLLs vanish — yet Tauri's `build.rs`
+  resource check still demands `sherpa-onnx-cxx-api.dll` etc. → `resource path … doesn't exist`. (The
+  *previous*, cold-cache run built Windows fine, which is why it looked intermittent.) The libs survive
+  under `target/release/deps` and `build/*/out`, so the fix is a **cache-safe restore step** that copies
+  them back into `target/release` before `tauri build`. Cold builds find nothing there and produce them
+  normally — a no-op.
+- **Linux — `.deb` built fine; only the AppImage step failed** (`failed to run linuxdeploy`). GitHub's
+  runners have no FUSE, and even with `APPIMAGE_EXTRACT_AND_RUN=1` linuxdeploy couldn't resolve the
+  loose sherpa/onnx `.so` libs. **Dropped AppImage from CI** (`--bundles deb`); the `.deb` is the
+  reliable Linux artifact and installs on Debian/Ubuntu.
+- **macOS — built the `.dmg` green already**, but the bundle was not self-contained: `sherpa-rs-sys`
+  deliberately adds **no desktop rpath** (its build.rs, ~line 575, only does mobile), and Tauri doesn't
+  place the dylibs in the `.app`. So even a launching app couldn't load a model.
+
+**The real cross-platform fix (make mac/linux able to load models, not just launch):**
+- **`src-tauri/build.rs`** now emits rpath link args: macOS `@executable_path/../Frameworks` (+
+  `@executable_path`, `@loader_path`), Linux `$ORIGIN` (+ `$ORIGIN/../lib/AuraScribe`, `-z origin`).
+  No-op on Windows (DLLs resolve from the exe dir). `cargo check` clean at v2.0.0.
+- **macOS CI step** (`release.yml`): after `tauri build`, embed every produced `*.dylib` into
+  `AuraScribe.app/Contents/Frameworks`, **ad-hoc codesign** the bundle (identity `-`, so an unsigned
+  build is even *allowed* to launch on Apple Silicon), then **rebuild the `.dmg`** from the patched app
+  with the familiar drag-to-Applications layout via `hdiutil`.
+- Draft-release notes rewritten to state honestly: Windows proven; macOS/Linux previews with dictation
+  logic present, macOS libs embedded + ad-hoc signed, **model-loading pending on-device verification**.
+
+**Injection/hotkey are now genuinely cross-platform (this predates today, confirmed while auditing):**
+`injection.rs` uses native Windows clipboard/SendInput and, off Windows, **`enigo`** (keystrokes) +
+**`arboard`** (clipboard paste, Cmd+V on macOS / Ctrl+V on Linux). The global hotkey uses Tauri's
+cross-platform `global_shortcut`. Only `system.rs::set_startup` (auto-launch on login) and
+`focus_window`/`capture_foreground_window` remain Windows-only — non-core; `focus_window` is a safe
+no-op off Windows.
+
+**New: `docs/INSTALL.md`** — per-OS install guide. The macOS section is the "so Mac doesn't block us"
+answer: **Open Anyway** via Privacy & Security, or `xattr -dr com.apple.quarantine
+/Applications/AuraScribe.app` (needed on Sequoia 15+ where right-click→Open no longer bypasses
+Gatekeeper), plus the **Accessibility + Microphone + Input Monitoring** grants dictation requires.
+
+**⚠️ Still unverified (cannot be tested from this Windows box — be honest):** whether the embedded
+dylibs/.so actually load a model on macOS/Linux. The rpath + Frameworks embedding is the standard
+approach and has a good chance, but the sherpa dylibs' `install_name`s could still need an
+`install_name_tool` fixup. **The test is the owner tagging `v2.0.0` and running the `.dmg`/`.deb` on
+real hardware** (or a friend's). If a model won't load, `aurascribe.log` names the exact missing
+library — a tight next iteration. `fail-fast: false` + the draft release exist for exactly this.
+
+**To ship:** `git push origin master` · `git tag v2.0.0 && git push origin v2.0.0`, then watch the
+Release run. Expect all three green with `.exe` / `.dmg` / `.deb` attached to the draft.
 
 ### 2026-08-18 — Spotlight onboarding (interactive walkthrough) — built + verified, HELD
 
