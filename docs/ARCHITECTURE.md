@@ -33,7 +33,7 @@ mic button in UI ──────────┘         │
                                      ↓
                      cleanup::clean                (local string ops)
                                      ↓
-                     injection::TextInjector       (Windows SendInput)
+                     injection::TextInjector       (Windows SendInput / macOS+Linux enigo+arboard)
                                      ↓
                      db.add_transcript             (history)
 ```
@@ -78,6 +78,54 @@ Three windows, all optional:
 - **tray icon** — the real "home" of the app. Left click opens settings; menu has
   Open Settings / Quit.
 
+## Cross-platform (Windows / macOS / Linux)
+
+As of v2.0.0 the app builds and runs on all three desktop OSes from one codebase. The platform-specific
+surface is small and lives behind `#[cfg(...)]`:
+
+- **Text injection (`injection.rs`).** Windows uses native clipboard + `SendInput`. macOS and Linux use
+  [`enigo`](https://github.com/enigo-rs/enigo) (synthetic keystrokes — CGEvent on macOS, X11/XTEST on
+  Linux) with [`arboard`](https://github.com/1Password/arboard) for the clipboard-paste path (⌘V on
+  macOS, Ctrl+V on Linux), restoring the previous clipboard afterwards.
+- **Global hotkey (`hotkey.rs`).** Tauri's cross-platform `global-shortcut` plugin. The default combo is
+  per-OS (`commands::default_hotkey`): Windows/Linux `Ctrl+Shift+Space`, macOS `⌘⇧Space` (dodging
+  Spotlight/​input-source combos).
+- **Still Windows-only (`system.rs`), non-core.** Auto-start-on-login and foreground-window capture are
+  Windows-only; off Windows they return an explicit error or are a safe no-op. Missing them does not stop
+  dictation.
+- **macOS Accessibility (TCC).** Synthetic input *and* global hotkeys require the Accessibility
+  permission; `macos-accessibility-client` is used to detect/prompt. The overlay's `.transparent(true)`
+  needs Tauri's `macos-private-api` (enabled in `Cargo.toml` + `macOSPrivateApi: true`), which is why
+  that build is self-distributed, not App-Store-bound.
+
+### Shipping the sherpa/ONNX shared libraries
+
+`sherpa-rs-sys` links against `onnxruntime` + `sherpa-onnx-c/cxx-api` shared libraries and copies them
+into `target/<profile>/` during its build script, but it adds **no runtime rpath** to the final binary
+(desktop). So each OS bundles them differently and `src-tauri/build.rs` adds the rpath:
+
+- **Windows** — the DLLs are listed in `tauri.moonshine.conf.json` `bundle.resources`, so NSIS drops
+  them next to `aurascribe.exe` (Windows resolves DLLs from the exe's own dir). The 3 MSVC runtime DLLs
+  ride along too (see Round 33).
+- **macOS** — CI builds only the `.app` (`--bundles app`), embeds `libonnxruntime*` / `libsherpa-onnx-*`
+  dylibs into `Contents/Frameworks`, ad-hoc signs, then makes the `.dmg` with `hdiutil`. `build.rs`
+  adds rpath `@executable_path/../Frameworks`. (Tauri's own dmg step deletes the `.app` right after
+  packaging, which is why we build the app and make the dmg ourselves.)
+- **Linux** — the `.deb` currently ships without the `.so` (a documented preview limitation);
+  `build.rs` already adds rpath `$ORIGIN` / `$ORIGIN/../lib/AuraScribe` for when they're bundled.
+
+### CI packaging (`.github/workflows/release.yml`)
+
+A matrix over `windows-latest` / `macos-latest` / `ubuntu-latest` builds each native bundle on a tag
+push and attaches them to one draft release. Two hard-won CI rules:
+
+- **Do not cache the `target` dir** (`Swatinem/rust-cache` `cache-targets: false`). On a warm cache
+  `sherpa-rs-sys` isn't rebuilt and its runtime libs are pruned from `target`, so they exist nowhere —
+  breaking the Windows resource check and the macOS embed. A cold target makes every run behave like the
+  proven first build.
+- **`tsconfig.json` excludes `src-tauri`.** Otherwise `next build` type-checks whisper's CMake
+  `compiler_depend.ts` under `target/` and fails with "Invalid character" (only on a warm cache).
+
 ## Permissions (Tauri v2 ACL)
 
 `src-tauri/capabilities/default.json` grants the frontend the core and plugin permissions
@@ -107,9 +155,11 @@ differently-shaped legacy table. That is what `002_settings_rebuild.sql` exists 
 
 ## Models
 
-Whisper models live in `%LOCALAPPDATA%\AuraScribe\models\` as `ggml-<id>.bin`.
+Models live in the per-OS app-data dir under `AuraScribe/models/` — Windows
+`%LOCALAPPDATA%\AuraScribe\models\`, macOS `~/Library/Application Support/dev.aurascribe.app/models/`,
+Linux `~/.local/share/dev.aurascribe.app/models/`. (Whisper's, when used, are `ggml-<id>.bin`.)
 
-- **Local**, not Roaming — they reach gigabytes and would otherwise sync on roaming profiles.
+- **Local**, not Roaming (Windows) — they reach gigabytes and would otherwise sync on roaming profiles.
 - Downloaded to a `.part` file and renamed on completion, so an interrupted download can't
   masquerade as a valid model.
 - Auto-loaded at startup if the configured model is already on disk.

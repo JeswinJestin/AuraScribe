@@ -6,7 +6,7 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-18 (**v2.0.0** — first cross-platform release: CI now green on Windows/macOS/Linux. Fixed the warm-cache Windows DLL regression, switched Linux to a reliable `.deb`, and made the macOS `.dmg` self-contained: rpath in build.rs + embedded sherpa/ONNX dylibs + ad-hoc signing. New `docs/INSTALL.md` with macOS Gatekeeper steps. macOS/Linux model-loading still needs an on-device check — see below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-18 (**v2.0.0** — first cross-platform release: CI now green on Windows/macOS/Linux. Fixed the warm-cache Windows DLL regression, switched Linux to a reliable `.deb`, and made the macOS `.dmg` self-contained: rpath in build.rs + embedded sherpa/ONNX dylibs + ad-hoc signing. New `docs/INSTALL.md` with macOS Gatekeeper steps. README + ARCHITECTURE.md rewritten for cross-platform. macOS/Linux model-loading still needs an on-device check — see below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Insights Stage 2 — shipped as v1.2.0:** the **yearly "Your Year" recap** (`year_recap` +
 `RecapView`, reachable from Insights year-round, own sidebar entry Dec–Jan) and **shareable PNG cards**
