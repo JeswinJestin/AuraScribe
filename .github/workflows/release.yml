@@ -93,7 +93,10 @@ jobs:
               src-tauri/target/release/bundle/nsis/*-setup.exe
           - name: macOS (Apple Silicon)
             os: macos-latest
-            tauri_args: '--features moonshine'
+            # Build ONLY the .app (not the .dmg): Tauri's dmg bundler deletes the .app right after
+            # packaging it, which left no bundle for the lib-embed step to patch. We build the .app,
+            # embed the sherpa dylibs + sign it, then create the .dmg ourselves in a later step.
+            tauri_args: '--features moonshine --bundles app'
             artifacts: |
               src-tauri/target/release/bundle/dmg/*.dmg
           - name: Linux (x64)
@@ -122,10 +125,17 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Cache the cargo REGISTRY (dependency downloads) but NOT the target dir. sherpa-rs-sys copies
+      # its runtime shared libs into target/release only while its build script runs, and Swatinem
+      # prunes those loose libs from a cached target — so on a cache hit they exist nowhere and both
+      # the Windows resource check and the macOS lib embedding break. A non-cached target means every
+      # build behaves like the proven first (cold) run: the libs are always freshly emitted. Costs a
+      # few extra minutes (whisper.cpp recompiles), acceptable for a tag-only release workflow.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          cache-targets: false
 
       # ---- Per-OS system dependencies -----------------------------------------------------
       # Linux: WebKitGTK (webview), GTK, appindicator (tray), ALSA (cpal capture), patchelf
@@ -164,16 +174,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # sherpa-rs-sys copies its runtime shared libs (onnxruntime + sherpa-onnx c/cxx api) into
-      # target ONLY while its build script runs. On a WARM Swatinem cache the crate isn't recompiled
-      # AND the cache pruned those libs entirely — so they exist nowhere, breaking BOTH the Windows
-      # resource check (`sherpa-onnx-cxx-api.dll doesn't exist`) and the macOS lib embedding. Force
-      # just this one crate to rebuild so its build script re-emits the libs. It only re-extracts a
-      # prebuilt binary (~30-60s), not a from-source compile, so the cache still pays off elsewhere.
-      - name: Force sherpa runtime libs to be re-emitted (cache-safe)
-        shell: bash
-        run: cargo clean -p sherpa-rs-sys --release --manifest-path src-tauri/Cargo.toml || true
-
       # `tauri build` runs `next build` (beforeBuildCommand) for the frontend, then compiles the
       # Rust and bundles the native installer(s) for this OS.
       - name: Build the app bundle
@@ -190,13 +190,12 @@ jobs:
         run: |
           set -euo pipefail
           app="src-tauri/target/release/bundle/macos/AuraScribe.app"
-          if [ ! -d "$app" ]; then echo "::warning::no .app produced — skipping"; exit 0; fi
+          if [ ! -d "$app" ]; then echo "::error::no .app at $app — cannot build the dmg"; ls -R src-tauri/target/release/bundle 2>/dev/null || true; exit 1; fi
           fw="$app/Contents/Frameworks"
           mkdir -p "$fw"
-          # Search the WHOLE release tree, not just the top level: on a warm Rust cache sherpa-rs-sys
-          # isn't recompiled, so its dylibs live only under deps/ and build/*/out (same root cause as
-          # the Windows DLL restore). Prune the bundle dir so we don't recurse into the .app itself,
-          # then embed one copy per unique basename. (bash 3.2 on the runner — no associative arrays.)
+          # Search the WHOLE release tree (top-level + deps/ + build/*/out) so we catch every copy
+          # sherpa-rs-sys emits. Prune the bundle dir so we don't recurse into the .app itself, then
+          # embed one copy per unique basename. (bash 3.2 on the runner — no associative arrays.)
           all_libs="$(find src-tauri/target/release -path '*/bundle' -prune -o -name '*.dylib' -type f -print)"
           count=0
           for base in $(printf '%s\n' "$all_libs" | xargs -n1 basename 2>/dev/null | sort -u); do
