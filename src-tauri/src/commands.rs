@@ -20,12 +20,33 @@ pub struct Settings {
     /// True once the first-run walkthrough has been dismissed. The UI shows onboarding while
     /// this is false; completing (or skipping) it saves `true`.
     pub onboarded: bool,
+    /// When false, the global dictation hotkey is not registered — the app effectively "sleeps"
+    /// and no keypress triggers recording until the user re-enables it in Settings. Default true.
+    pub hotkey_enabled: bool,
+}
+
+/// Platform-appropriate default global shortcut. Always a modifier + a non-alphabet key (a bare
+/// letter would hijack that key while typing), chosen to dodge each OS's reserved combos:
+/// Windows/Linux use `Ctrl+Shift+Space`; macOS uses `Super+Shift+Space` (Cmd+Shift+Space), steering
+/// clear of Cmd+Space (Spotlight) and Ctrl+Space (input-source switch). "Super" is how this app's
+/// hotkey format spells the Cmd/Win key (see `HotkeyCapture`), and tauri's shortcut parser maps it
+/// to Cmd on macOS. NOTE: the macOS default has not been validated on a real Mac yet — do that when
+/// the macOS build is exercised in CI/on-target.
+pub fn default_hotkey() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        "Super+Shift+Space".to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+Shift+Space".to_string()
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            hotkey: "Ctrl+Shift+Space".to_string(),
+            hotkey: default_hotkey(),
             hotkey_mode: "toggle".to_string(),
             // Moonshine is the shipped default engine (v0.4.x bundles it). The Whisper catalogue
             // is now empty, so a Whisper-only dev build ships no built-in model — the default
@@ -41,6 +62,7 @@ impl Default for Settings {
             // Safe fallback if the DB read ever fails: don't nag. A genuine fresh install gets
             // onboarded = 0 from the database (see `Database::new`), which is authoritative.
             onboarded: true,
+            hotkey_enabled: true,
         }
     }
 }
@@ -99,6 +121,7 @@ async fn load_settings_from_db(db: &Database) -> Result<Settings, String> {
         start_at_login: row.start_at_login != 0,
         sound_cues: row.sound_cues != 0,
         onboarded: row.onboarded != 0,
+        hotkey_enabled: row.hotkey_enabled != 0,
     })
 }
 
@@ -114,8 +137,14 @@ pub async fn save_settings(
     app: AppHandle,
     settings: Settings,
 ) -> Result<(), String> {
-    crate::hotkey::apply(&app, &settings.hotkey, &settings.hotkey_mode)
-        .map_err(|e| format!("Invalid hotkey \"{}\": {}", settings.hotkey, e))?;
+    // Register the hotkey only when it's enabled; when disabled, tear it down so no keypress
+    // triggers dictation ("sleep" the app from Settings).
+    if settings.hotkey_enabled {
+        crate::hotkey::apply(&app, &settings.hotkey, &settings.hotkey_mode)
+            .map_err(|e| format!("Invalid hotkey \"{}\": {}", settings.hotkey, e))?;
+    } else {
+        crate::hotkey::disable(&app);
+    }
 
     {
         let db = state.db.lock().await;
@@ -132,6 +161,7 @@ pub async fn save_settings(
             start_at_login: settings.start_at_login as i32,
             sound_cues: settings.sound_cues as i32,
             onboarded: settings.onboarded as i32,
+            hotkey_enabled: settings.hotkey_enabled as i32,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -249,6 +279,10 @@ async fn transcribe_chunk(
     if trimmed.is_empty() {
         return;
     }
+
+    // Boost a soft/quiet recording toward a healthy level so a soft-spoken user transcribes as well
+    // as a loud one. Conservative: only amplifies, capped, leaves already-loud audio untouched.
+    let trimmed = crate::chunking::normalize_gain(&trimmed);
 
     let asr = asr.clone();
     let lang = language.to_string();
@@ -994,9 +1028,21 @@ pub async fn open_settings_folder() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("Opening the settings folder is not yet implemented on this platform".to_string())
+        std::process::Command::new("open")
+            .arg(data_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(data_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 
@@ -1046,27 +1092,30 @@ pub async fn request_microphone_permission() -> Result<bool, String> {
 
 #[command]
 pub async fn check_accessibility_permission() -> Result<bool, String> {
-    // SendInput on Windows does not require the Accessibility permission that
-    // macOS gates synthetic keyboard events behind.
-    #[cfg(target_os = "windows")]
+    // macOS gates synthetic keyboard events AND global hotkeys behind the Accessibility permission;
+    // Windows (SendInput) and Linux/X11 (XTEST) need no such grant.
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos_accessibility_client::accessibility::application_is_trusted())
+    }
+    #[cfg(not(target_os = "macos"))]
     {
         Ok(true)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(false)
     }
 }
 
 #[command]
 pub async fn request_accessibility_permission() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(target_os = "macos")]
     {
+        // Prompts the user and deep-links to System Settings → Privacy & Security → Accessibility.
+        // Without this grant, dictation cannot type into other apps and the hotkey won't fire.
+        macos_accessibility_client::accessibility::application_is_trusted_with_prompt();
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(target_os = "macos"))]
     {
-        Err("Accessibility permission handling is not yet implemented on this platform".to_string())
+        Ok(())
     }
 }
 
@@ -1136,6 +1185,7 @@ mod wire_format_tests {
             "start_at_login",
             "sound_cues",
             "onboarded",
+            "hotkey_enabled",
         ] {
             assert!(
                 json.get(field).is_some(),

@@ -142,9 +142,73 @@ impl TextInjector {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub fn inject_text(&self, _text: &str) -> Result<(), String> {
-        Err("Text injection is not yet implemented on this platform".into())
+    pub fn inject_text(&self, text: &str) -> Result<(), String> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        // Same strategy as Windows: paste long text, type short text, each falling back to the other.
+        if text.chars().count() > PASTE_THRESHOLD {
+            return match paste_text(text) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    tracing::warn!("Paste failed ({}); falling back to typing", e);
+                    type_text(text)
+                        .map_err(|te| format!("Could not paste ({e}) and could not type ({te})"))
+                }
+            };
+        }
+        match type_text(text) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                tracing::warn!("Typing failed ({}); falling back to paste", e);
+                paste_text(text)
+                    .map_err(|pe| format!("Could not type ({e}) and could not paste ({pe})"))
+            }
+        }
     }
+}
+
+/// Type text as Unicode keystrokes (enigo → macOS CGEvent / Linux X11-XTEST).
+#[cfg(not(target_os = "windows"))]
+fn type_text(text: &str) -> Result<(), String> {
+    use enigo::{Enigo, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
+        format!("input backend unavailable ({e}) — on macOS, grant Accessibility permission in System Settings")
+    })?;
+    enigo.text(text).map_err(|e| e.to_string())
+}
+
+/// Put text on the clipboard (arboard) and send the paste shortcut — Cmd+V on macOS, Ctrl+V on
+/// Linux — via enigo, then restore the previous clipboard. The restore is best-effort on Linux/X11,
+/// where clipboard ownership is tied to a live process.
+#[cfg(not(target_os = "windows"))]
+fn paste_text(text: &str) -> Result<(), String> {
+    use arboard::Clipboard;
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
+    let previous = clipboard.get_text().ok();
+    clipboard.set_text(text.to_string()).map_err(|e| e.to_string())?;
+
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
+        format!("input backend unavailable ({e}) — on macOS, grant Accessibility permission in System Settings")
+    })?;
+
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())?;
+
+    // The paste is asynchronous — the target reads the clipboard when it processes the keystroke.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    if let Some(prev) = previous {
+        let _ = clipboard.set_text(prev);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

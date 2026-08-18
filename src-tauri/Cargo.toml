@@ -1,6 +1,6 @@
 [package]
 name = "aurascribe"
-version = "1.2.0"
+version = "1.3.0"
 description = "Free, open-source, privacy-first voice dictation that works everywhere"
 authors = ["AuraScribe Contributors"]
 license = "MIT"
@@ -76,11 +76,17 @@ windows = { version = "0.58", features = [
 ] }
 winreg = "0.52"
 
+# Text injection off Windows. Windows keeps its proven native SendInput/clipboard path; macOS and
+# Linux use cross-platform crates instead of hand-rolled FFI: `enigo` synthesizes keystrokes
+# (macOS CGEvent, Linux X11/XTEST) and `arboard` drives the clipboard for the paste path.
+[target.'cfg(unix)'.dependencies]
+enigo = "0.2"
+arboard = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
-objc2-foundation = "0.2"
-objc2-app-kit = "0.2"
-core-graphics = "0.24"
+# macOS gates synthetic input AND global hotkeys behind the Accessibility permission (TCC). This
+# checks whether the app is trusted and prompts the user to grant it.
+macos-accessibility-client = "0.0.1"
 
 [features]
 # `moonshine` joined `default` at v1.0.0: the download + transcribe path is proven on real

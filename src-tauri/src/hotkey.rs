@@ -5,6 +5,12 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::app_state::AppState;
 
+/// Turn the global hotkey off entirely — used when the user disables it in Settings ("sleep" the
+/// app). Unregisters every shortcut so nothing triggers dictation until it is re-enabled.
+pub fn disable(app: &AppHandle) {
+    let _ = app.global_shortcut().unregister_all();
+}
+
 pub fn apply(app: &AppHandle, combo: &str, mode: &str) -> Result<(), String> {
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;

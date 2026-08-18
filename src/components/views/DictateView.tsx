@@ -60,7 +60,11 @@ export function DictateView({
           AuraScribe transcribes on this machine, so it needs a speech model installed first.
           You download it once — after that it works offline, forever.
         </p>
-        <button onClick={onGoToSettings} className="btn-primary mx-auto mt-6">
+        <button
+          onClick={onGoToSettings}
+          data-tour="download-model"
+          className="btn-primary mx-auto mt-6"
+        >
           <Download className="h-4 w-4" />
           Choose a model
         </button>
@@ -81,6 +85,7 @@ export function DictateView({
         <button
           onClick={onToggleRecording}
           disabled={status.is_processing}
+          data-tour="record"
           className={`flex h-[68px] w-[68px] items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
             status.is_recording
               ? 'bg-[hsl(var(--record))] hover:opacity-90'

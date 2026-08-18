@@ -50,10 +50,18 @@ impl Database {
         // it must stay editable for upgrades). Glass is the intended first-impression look, and
         // onboarding should run once. Returning users are never touched by this.
         if is_fresh {
-            sqlx::query("UPDATE settings SET theme = 'glass', onboarded = 0 WHERE id = 1")
+            // The settings row's hotkey is seeded by migration SQL as `Ctrl+Shift+Space` on every
+            // platform, so a fresh install needs the platform-appropriate default applied here
+            // (macOS → Cmd+Shift+Space). Onboarding reads this value, so this is also what makes
+            // the walkthrough show the right keys per device. Existing users are never touched.
+            sqlx::query("UPDATE settings SET theme = 'glass', onboarded = 0, hotkey = ? WHERE id = 1")
+                .bind(crate::commands::default_hotkey())
                 .execute(&pool)
                 .await?;
-            info!("Fresh install: defaulted to Glass appearance and enabled onboarding");
+            info!(
+                "Fresh install: Glass appearance, onboarding on, hotkey = {}",
+                crate::commands::default_hotkey()
+            );
         }
 
         info!("Database initialized at {}", db_path.display());
@@ -68,7 +76,8 @@ impl Database {
             "UPDATE settings SET
                 hotkey = $1, hotkey_mode = $2, whisper_model = $3, mic_device = $4,
                 ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
-                theme = $8, start_at_login = $9, sound_cues = $10, onboarded = $11
+                theme = $8, start_at_login = $9, sound_cues = $10, onboarded = $11,
+                hotkey_enabled = $12
             WHERE id = 1",
         )
         .bind(&s.hotkey)
@@ -82,6 +91,7 @@ impl Database {
         .bind(s.start_at_login)
         .bind(s.sound_cues)
         .bind(s.onboarded)
+        .bind(s.hotkey_enabled)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -533,6 +543,7 @@ pub struct SettingsRow {
     pub start_at_login: i32,
     pub sound_cues: i32,
     pub onboarded: i32,
+    pub hotkey_enabled: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]

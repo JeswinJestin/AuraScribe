@@ -32,36 +32,52 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
-/// Shrink the window if its configured size doesn't fit the monitor it opened on, then
-/// re-centre. The default is sized for a 1080p desktop; on a 1366x768 laptop that default
-/// would be born larger than the screen, with its own controls off the edge. Only ever
-/// shrinks — a large display keeps the designed size. Tauri still enforces `minWidth` /
-/// `minHeight`, so this cannot collapse the layout below what it can render.
+/// Size the main window to comfortably fit whatever display it opens on, then centre it.
+///
+/// Works in **logical** pixels — the same unit the window config's `width`/`height`/`minWidth`/
+/// `minHeight` use — so it is correct on any DPI/scale. The previous version only *shrank* an
+/// oversized window and did the maths in physical pixels; on a high-DPI or smaller laptop the
+/// 1480x936 design size scales up past the screen and the clamp left the window a wrong shape with
+/// its own controls off the edge (the "width isn't right" report). Now the window is always ~92%
+/// of the monitor's work area, clamped so it is never larger than the design size and never smaller
+/// than the min size Tauri can render.
 fn fit_to_screen(window: &tauri::WebviewWindow) {
     let Ok(Some(monitor)) = window.current_monitor() else {
         return;
     };
-    // The work area is the screen minus the taskbar — the real space a window can occupy.
-    // A percentage-of-screen guess was wrong in practice: 90% of 1080 clamped the height to
-    // 972 on an ordinary 1080p desktop, shrinking the window below its design size for no
-    // reason. The work area on that same machine is 1032 tall, which fits it exactly.
-    let area = monitor.work_area().size;
-    let Ok(outer) = window.outer_size() else {
-        return;
-    };
-
-    if outer.width <= area.width && outer.height <= area.height {
+    let scale = monitor.scale_factor();
+    if !(scale > 0.0) {
         return;
     }
+    // work_area() is the screen minus the taskbar, in PHYSICAL px.
+    let area = monitor.work_area().size;
+    let (target_w, target_h) = fitted_window_size(area.width, area.height, scale);
 
-    let fitted =
-        tauri::PhysicalSize::new(outer.width.min(area.width), outer.height.min(area.height));
     tracing::info!(
-        "Window {}x{} doesn't fit {}x{} work area; fitting to {}x{}",
-        outer.width, outer.height, area.width, area.height, fitted.width, fitted.height
+        "Sizing window to {:.0}x{:.0} logical (work area {}x{} physical @ {}x scale)",
+        target_w, target_h, area.width, area.height, scale
     );
-    let _ = window.set_size(fitted);
+    let _ = window.set_size(tauri::LogicalSize::new(target_w, target_h));
     let _ = window.center();
+}
+
+/// Pure sizing maths (returns LOGICAL px), split out so it can be unit-tested without a real
+/// window. Given a monitor's physical work-area size and DPI scale, returns ~92% of the work area,
+/// clamped to never exceed the design size nor fall below the min size.
+fn fitted_window_size(area_phys_w: u32, area_phys_h: u32, scale: f64) -> (f64, f64) {
+    // Keep in sync with tauri.conf.json → app.windows[0].
+    const DESIGN_W: f64 = 1480.0;
+    const DESIGN_H: f64 = 936.0;
+    const MIN_W: f64 = 860.0;
+    const MIN_H: f64 = 560.0;
+    const MARGIN: f64 = 0.92; // breathing room around the window on smaller screens
+
+    let area_w = area_phys_w as f64 / scale;
+    let area_h = area_phys_h as f64 / scale;
+    (
+        (area_w * MARGIN).clamp(MIN_W, DESIGN_W),
+        (area_h * MARGIN).clamp(MIN_H, DESIGN_H),
+    )
 }
 
 /// Makes `tracing` write to `%LOCALAPPDATA%\AuraScribe\aurascribe.log`. A release build has no
@@ -207,8 +223,21 @@ fn main() {
             tray::build(&app_handle)?;
             overlay::create(&app_handle)?;
 
-            if let Err(e) = hotkey::apply(&app_handle, &settings.hotkey, &settings.hotkey_mode) {
-                tracing::warn!("Failed to register default hotkey \"{}\": {}", settings.hotkey, e);
+            if settings.hotkey_enabled == 0 {
+                tracing::info!("Dictation hotkey disabled in settings; not registering it.");
+            } else if let Err(e) = hotkey::apply(&app_handle, &settings.hotkey, &settings.hotkey_mode) {
+                tracing::warn!("Failed to register hotkey \"{}\": {}", settings.hotkey, e);
+                // Don't fail silently — record it so the UI can tell the user their dictation
+                // shortcut isn't active (usually another app already grabbed the same combo).
+                let app2 = app_handle.clone();
+                let combo = settings.hotkey.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app2.state::<AppState>();
+                    let mut status = state.status.lock().await;
+                    status.last_error = Some(format!(
+                        "Couldn't register the {combo} hotkey — another app may be using it. Pick a different shortcut in Settings."
+                    ));
+                });
             }
 
             // Keep the app running in the tray when the settings window is closed.
@@ -278,4 +307,50 @@ fn main() {
                 tracing::info!("AuraScribe shutting down");
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fitted_window_size;
+
+    // Design 1480x936, min 860x560, margin 0.92 — kept in sync with tauri.conf.json.
+
+    #[test]
+    fn desktop_1080p_stays_at_design_size() {
+        // 1080p, 100% scale, work area 1920x1032 → 0.92 exceeds the design size → clamped to it.
+        assert_eq!(fitted_window_size(1920, 1032, 1.0), (1480.0, 936.0));
+    }
+
+    #[test]
+    fn four_k_stays_at_design_size() {
+        assert_eq!(fitted_window_size(3840, 2100, 1.0), (1480.0, 936.0));
+    }
+
+    #[test]
+    fn small_laptop_shrinks_to_fit() {
+        // 1366x768, 100% scale, taskbar ~40px → 1366x728 work area.
+        let (w, h) = fitted_window_size(1366, 728, 1.0);
+        assert!(w > 860.0 && w < 1480.0, "width {w} out of range");
+        assert!(h > 560.0 && h < 936.0, "height {h} out of range");
+        assert!((w - 1366.0 * 0.92).abs() < 0.5);
+        assert!((h - 728.0 * 0.92).abs() < 0.5);
+    }
+
+    #[test]
+    fn high_dpi_uses_logical_not_physical_pixels() {
+        // 1080p laptop at 150% scale: physical work area 1920x1032 → logical 1280x688.
+        // The old physical-pixels logic mis-shaped the window here; logical maths keeps it on-screen.
+        let (w, h) = fitted_window_size(1920, 1032, 1.5);
+        assert!((w - 1177.6).abs() < 0.5, "width {w}");
+        assert!((h - 632.96).abs() < 0.5, "height {h}");
+        assert!((860.0..=1480.0).contains(&w) && (560.0..=936.0).contains(&h));
+    }
+
+    #[test]
+    fn tiny_screen_never_below_min() {
+        // 1024x600: the height maths (552) would dip below the min, so it clamps up to 560.
+        let (w, h) = fitted_window_size(1024, 600, 1.0);
+        assert!((860.0..=1480.0).contains(&w), "width {w}");
+        assert_eq!(h, 560.0);
+    }
 }

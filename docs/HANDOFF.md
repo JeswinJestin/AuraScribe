@@ -6,7 +6,7 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-14 (v1.2.0 shipped — Insights recap + share cards; chunking experiment reverted; journal added) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-18 (v1.3.0 prepped + Windows installer built: onboarding/sounds/voice, per-OS hotkey on fresh installs, disable-hotkey toggle, window-sizing fix, low-voice gain; CI + favicon. Notes/checklist in docs/. HELD pending owner on-device verify + tag) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Insights Stage 2 — shipped as v1.2.0:** the **yearly "Your Year" recap** (`year_recap` +
 `RecapView`, reachable from Insights year-round, own sidebar entry Dec–Jan) and **shareable PNG cards**
@@ -89,6 +89,150 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### 2026-08-18 — Spotlight onboarding (interactive walkthrough) — built + verified, HELD
+
+Replaced the old 5-step `Onboarding.tsx` modal with an **interactive spotlight walkthrough** the
+owner requested: highlight one thing, dim + blur the rest, skippable at every step, replayable.
+Design spec: `docs/superpowers/specs/2026-08-18-spotlight-onboarding-design.md`.
+
+**What shipped (frontend only, no backend/IPC change):**
+- **`src/components/SpotlightTour.tsx`** — portaled overlay, no dependency. Dim+blur surround is
+  four `backdrop-filter` panels tiling around the target rect (no CSS-mask fragility) + an indigo
+  ring; the target is tracked every animation frame so the cut-out follows layout/scroll/resize.
+  Three stops: **Welcome** (card) → **"See it work"** (animation) → **"Add a voice model"** (a real
+  DOM spotlight on the Dictate Download CTA, or the record button on replay). **Skip on every step**;
+  final button "Start dictating". Card is height-capped + internally scrollable so controls never
+  fall off a short window.
+- **`src/components/HotkeyDemo.tsx`** — the step-2 motion graphic: a JS phase machine animates
+  `Ctrl+Shift+Space` pressing → mic lights up (indigo) → signal bars → text types into a faux field
+  ("Hi — right where my cursor is."). Colour-matched; **reduced-motion → static final frame**. A
+  deliberate, documented exception to DESIGN.md's "only the signal meter moves" rule (first-run only).
+- **Wiring:** `page.tsx` shows the tour on first run (`!onboarded`) or replay, and forces the Dictate
+  view + expands the sidebar so the anchor exists. `DictateView` gained `data-tour="download-model"`
+  / `data-tour="record"`. `SettingsView` got a **"Replay walkthrough"** button (Application section).
+  Old `Onboarding.tsx` deleted. New caret keyframe `tour-caret` in `globals.css`.
+- **Dev-only preview harness** (`src/app/preview/page.tsx`, `.claude/launch.json` `aurascribe-frontend`
+  = `next dev`): renders the real Onboarding tour + Insights/Streak + Recap against a stubbed Tauri
+  `invoke` with sample data, so UI can be reviewed in a browser without installing the app or touching
+  the owner's DB. **Note: this route is in the frontend `next build` output — remove or gate it before
+  a release** (kept for now since we're not shipping).
+
+**Verified by RUNNING (`next dev` → /preview, owner watched it live):** all three steps, the full
+animation cycle (keys→mic→typed text), the spotlight landing on the real "Choose a model" button with
+the ring + dimmed surround, and Skip dismissing from any step. `npm run typecheck` clean. (No frontend
+vitest suite exists; the Rust side was untouched.)
+
+**Round 2 tweaks (same day, owner feedback, verified in preview):**
+- **Sound effects** in step 2 (`src/lib/demoSounds.ts`, Web Audio, no dependency): a key-press click
+  and a mic-on chime, plus `playDemoVoice()` which plays `public/onboarding-voice.mp3` **if present**
+  (owner will drop an ElevenLabs clip there; 404s are swallowed until then).
+- **Demo now plays ONCE → holds on the finished frame → "Replay" button**, instead of an endless
+  loop, so the sound cues aren't repetitive. Reduced-motion still jumps to the final frame, silent.
+- **Spoken line changed** to `Schedule my email for 9 AM.` (short, specific, no em dash) — the
+  `DEMO_TEXT` constant in `HotkeyDemo.tsx`; keep the voice recording matching it.
+- **Demo keycaps are now derived from the real hotkey** (so macOS shows Cmd, not Ctrl).
+- **Skip moved inline** next to Next in a muted tone, on steps 1 & 2 only (step 3 has just "Start
+  dictating"). The prominent top-right "Skip tour" was removed.
+
+**Per-OS default hotkeys (done, `cargo check` clean):** `commands.rs::default_hotkey()` returns a
+platform default — **Windows/Linux `Ctrl+Shift+Space`, macOS `Super+Shift+Space` (Cmd+Shift+Space)**,
+dodging Cmd+Space (Spotlight) / Ctrl+Space (input source). Both are modifier + non-alphabet by rule.
+Registration errors are surfaced, not swallowed: `save_settings` already returns a clear error for a
+bad/taken combo (commands.rs), and `main.rs` startup now sets `status.last_error` ("another app may be
+using it…") instead of only logging. **The macOS combo is unvalidated on a real Mac — confirm on-target.**
+
+**Window sizing fix (done, `cargo test` 66/66):** `main.rs::fit_to_screen` was physical-pixel and
+shrink-only, so on a high-DPI/smaller laptop the 1480×936 design size scaled past the screen and the
+window opened a wrong shape with its controls off the edge (the friend's "width isn't right" report).
+Rewrote it to size in **logical** pixels at ~92% of the monitor work area, clamped to `[min, design]`,
+DPI-correct. Split the maths into a pure `fitted_window_size()` with **5 unit tests** covering 1080p,
+4K, a 1366×768 laptop, a 150%-DPI laptop, and a tiny screen. **On-screen result still needs the built
+app on real machines (esp. the friend's) — only the maths is verified here.**
+
+**Onboarding voice wired (verified 200 + decodes + plays):** owner added `public/onboarding-voice.mp3`
+(1.85 s mono). `HotkeyDemo` plays it once at the "speak" phase via `demoSounds.playDemoVoice()`. Keep
+the recording matching `DEMO_TEXT` ("Schedule my email for 9 AM.") in `HotkeyDemo.tsx`.
+
+**Round 3 tweaks (same day):**
+- **Onboarding voice timing** re-ordered to the real dictation flow: key click → **mic-on chime** →
+  **voice plays** (`public/onboarding-voice.mp3`, 1.85 s) → **mic-off chime** (`demoSounds.playMicOff`)
+  → **text appears**. The mic now visually turns off before the text lands. Demo verified in `/preview`.
+- **Disable-hotkey toggle** (Settings → Hotkey): new `hotkey_enabled` setting (migration
+  `008_hotkey_enabled.sql`, DB + `commands.rs` + `ipc.ts` + `page.tsx` + a `Toggle`). When off,
+  `hotkey::disable()` unregisters the global shortcut so no keypress triggers dictation — "sleep" the
+  app from Settings. Startup skips registration when disabled. `cargo test` 66/66, `tsc` clean. The
+  on-device "disabled key does nothing" behaviour needs the running app to fully confirm.
+- **Favicon** (in `../aurascribe-landing`): investigated — it is **NOT broken**. Live
+  `www.aurascribe.dev/favicon.ico` returns 200 / image/x-icon / 16/32/48, deployed since 2026-08-14.
+  The Google blank-globe is **Google's favicon-refresh latency**, fixable only by **requesting
+  re-indexing in Google Search Console** (see the landing repo's `docs/SEO-LAUNCH-CHECKLIST.md`), not
+  by code. Hardened the icon to 7 sizes (16→256) as belt-and-suspenders (uncommitted in that repo).
+
+**Round 4 (same day):**
+- **Per-OS hotkey now actually reaches a fresh install (bug fix).** The settings row's hotkey is
+  seeded by migration SQL as `Ctrl+Shift+Space` on every platform, so `commands::default_hotkey()`
+  (the cfg default) never applied to real installs — a fresh **macOS** install would have gotten
+  Ctrl+Shift+Space and onboarding would show the wrong keys. `Database::new`'s fresh-install block now
+  also sets `hotkey = default_hotkey()` (macOS → Cmd+Shift+Space). Onboarding reads that value, and
+  the tour's inline keycaps map `Super → Cmd`, so the walkthrough shows the right keys per device.
+  **Needs on-target macOS verification.**
+- **Low-voice gain (the doable half of the audio work), DONE.** `chunking::normalize_gain()` boosts a
+  quiet recording toward a healthy peak before transcription — **only amplifies, capped at 10×, leaves
+  already-loud audio untouched, skips near-silent buffers.** Applied in the transcribe path after
+  `trim_silence`. Pure DSP, no dependency, 5 unit tests (`cargo test` 71/71). Real-world effect on
+  quiet speech needs on-device testing, but it's low-risk (a loud, working setup is untouched).
+- **Landing GSC — diagnosed, no code fix warranted.** "Page with redirect" (2) = the intentional
+  apex→www canonicalization (those should be non-indexed; www is canonical). "Discovered – currently
+  not indexed" (4 blog posts) = normal for a ~4-day-old site; the sitemap lists them and the blog index
+  links them all, so it's time + backlinks + the re-index request the owner already made. Levers are
+  in `docs/SEO-LAUNCH-CHECKLIST.md` (landing repo), not code.
+
+**HELD — nothing pushed or committed (AuraScribe app).** Per the owner: get everything working across
+devices first, *then* push together. **Deferred to a FUTURE release (owner's call):** **noisy-room
+noise suppression** — the hard half of the audio work (a VAD/denoise model + on-device tuning across
+noise conditions), which can't be responsibly done or verified without real audio testing. Journal:
+2026-08-18.
+
+### 2026-08-18 — Cross-platform release CI (Win/Mac/Linux matrix) + config de-Windows-ing
+
+**First slice of Project B (macOS/Linux), the CI half only.** New
+**`.github/workflows/release.yml`**: a `strategy.matrix` over **`windows-latest` /
+`macos-latest` / `ubuntu-latest`** that, on a `v*` tag, builds each native bundle in parallel and
+attaches all of them (`.exe` · `.dmg` · `.deb` + `.AppImage`) to **one** GitHub Release. Windows
+mirrors the proven local build exactly (`--features moonshine --config
+src-tauri/tauri.moonshine.conf.json`); macOS/Linux use default features. Native runners (not
+cross-compile) because whisper.cpp builds from source per-host and sherpa-rs downloads a prebuilt
+sherpa-onnx per-host. `workflow_dispatch` = build-only validation without publishing. Linux job
+`chmod +x`'s the AppImage; the release is created as a **DRAFT** for human review before publish.
+
+**Config change (the one real hardcoded-Windows assumption):** removed the three MSVC runtime DLLs
+from `bundle.resources` in the **shared** `tauri.conf.json` — otherwise a macOS/Linux runner would
+bundle Windows `.dll`s into a `.dmg`/`.deb`/`.AppImage`. They now live **only** in the Windows-only
+overlay `tauri.moonshine.conf.json` (which every build script already passes), so the Windows
+installer is **byte-for-byte unchanged**. Verified both JSON files parse and the overlay still
+carries all 7 DLLs; `bundle.targets` left as-is (Tauri filters it to the host's valid types).
+
+**Audit:** the Rust already compiles cross-platform — every `use windows::`/`use winreg::` is inside
+a `#[cfg(target_os = "windows")]` fn, and the non-Windows paths are honest `Err("… not yet
+implemented on this platform")` stubs. `cpal` (sound/audio) is cross-platform. The macOS deps
+(`objc2`, `core-graphics`) are declared but **unused** — a placeholder for future injection.
+
+**⚠️ HONEST LIMITS — the macOS/Linux bundles are NOT usable yet (this is why it's a draft):**
+- **They can't dictate.** Text injection, hotkey→startup, "open settings folder", accessibility all
+  return the "not implemented" stub off Windows. Install + launch works; speaking pastes nothing.
+  Publishing these as "production" would break *"never claim more than the code does."*
+- **sherpa/ONNX shared libs aren't bundled on Mac/Linux.** On Windows the overlay copies the `.dll`s
+  next to the exe; the `.dylib`/`.so` equivalents have never been located/bundled. The **first CI run's
+  logs** will reveal their names — that's the follow-up before a model will load off-Windows.
+- **Not verifiable from this Windows box / sandbox.** Checked via YAML validation + config parse +
+  full source audit. **The real test is the owner pushing a `v*` tag.** Expect the Mac/Linux rows to
+  need 1–2 iterations — `fail-fast: false` + the draft release exist precisely for that.
+
+**To make Mac/Linux real (next):** implement injection + hotkey/startup on macOS (CGEvent +
+Accessibility — the deps are already in `Cargo.toml`) and Linux (`xdotool`/`wtype`), then bundle the
+sherpa/ONNX `.dylib`/`.so`. Until then, non-Windows artifacts are **experimental previews**. Full
+narrative in `docs/PROJECT-JOURNAL.md` (2026-08-18).
 
 ### Round 35 (2026-08-14) — Insights streaks + freezes + milestones (Project A, Stage 1)
 

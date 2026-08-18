@@ -17,6 +17,8 @@ export interface Settings {
   sound_cues: boolean
   /** False until the first-run walkthrough is dismissed; the UI shows onboarding while false. */
   onboarded: boolean
+  /** When false, the global dictation hotkey is unregistered — the app "sleeps" until re-enabled. */
+  hotkey_enabled: boolean
 }
 
 export interface Status {

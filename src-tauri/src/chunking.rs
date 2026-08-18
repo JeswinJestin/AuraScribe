@@ -193,6 +193,33 @@ pub fn trim_silence(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     out
 }
 
+/// Target peak a quiet recording is boosted toward.
+pub const NORMALIZE_TARGET_PEAK: f32 = 0.9;
+/// Ceiling on the boost, so a near-silent buffer of room tone isn't blasted up into noise.
+pub const NORMALIZE_MAX_GAIN: f32 = 10.0;
+/// Below this peak the buffer is effectively silent and left alone — amplifying it would only
+/// raise the noise floor, not reveal speech.
+const NORMALIZE_MIN_PEAK: f32 = 1e-3;
+
+/// Boost a quiet recording toward a healthy level before transcription, so a soft-spoken user is
+/// heard as well as a loud one. Deliberately conservative and low-risk: it **only amplifies**
+/// (never attenuates), **caps** the gain, leaves an **already-loud** clip untouched, and skips a
+/// **near-silent** buffer entirely. Pure DSP — no dependency, negligible cost. This is the
+/// low-voice half of the audio-pickup work; robust noisy-room suppression is a separate, larger
+/// effort (a VAD/denoise model + on-device tuning) tracked for its own release.
+pub fn normalize_gain(samples: &[f32]) -> Vec<f32> {
+    let peak = samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    if peak < NORMALIZE_MIN_PEAK {
+        return samples.to_vec();
+    }
+    let gain = (NORMALIZE_TARGET_PEAK / peak).min(NORMALIZE_MAX_GAIN);
+    if gain <= 1.0 {
+        // Already at or above target — don't touch a recording that's already loud enough.
+        return samples.to_vec();
+    }
+    samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +361,40 @@ mod tests {
         assert!(!trim_silence(&silence(2.0), SR).is_empty());
         assert!(trim_silence(&[], SR).is_empty());
         assert_eq!(trim_silence(&tone(1.0), 0).len(), tone(1.0).len());
+    }
+
+    #[test]
+    fn boosts_a_quiet_clip_toward_the_target() {
+        let quiet = vec![0.1, -0.1, 0.05, -0.08, 0.1];
+        let out = normalize_gain(&quiet);
+        let peak = out.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!((peak - NORMALIZE_TARGET_PEAK).abs() < 0.01, "peak {peak} not near target");
+    }
+
+    #[test]
+    fn leaves_an_already_loud_clip_untouched() {
+        let loud = vec![0.95, -0.9, 0.5, -0.95];
+        assert_eq!(normalize_gain(&loud), loud);
+    }
+
+    #[test]
+    fn caps_the_gain_on_a_very_quiet_clip() {
+        // peak 0.01 → 0.9/0.01 = 90, capped to NORMALIZE_MAX_GAIN (10) → peak ~0.1, not blasted.
+        let very_quiet = vec![0.01, -0.01, 0.008];
+        let peak = normalize_gain(&very_quiet).iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!((peak - 0.1).abs() < 0.005, "peak {peak} should be ~0.1 (10x cap)");
+    }
+
+    #[test]
+    fn leaves_near_silence_alone() {
+        let hush = vec![0.0002, -0.0003, 0.0001];
+        assert_eq!(normalize_gain(&hush), hush);
+    }
+
+    #[test]
+    fn never_exceeds_full_scale_and_handles_empty() {
+        let out = normalize_gain(&[0.2, -0.3, 0.25]);
+        assert!(out.iter().all(|&s| s.abs() <= 1.0));
+        assert!(normalize_gain(&[]).is_empty());
     }
 }

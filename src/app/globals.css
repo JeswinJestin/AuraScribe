@@ -383,6 +383,15 @@
   .fade-up {
     animation: fade-up 200ms ease-out both;
   }
+
+  /* Blinking caret for the onboarding "See it work" demo (HotkeyDemo). */
+  @keyframes tour-caret {
+    0%, 45% { opacity: 1; }
+    55%, 100% { opacity: 0; }
+  }
+  .tour-caret {
+    animation: tour-caret 1s step-end infinite;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -80,10 +80,13 @@ export function SettingsView({
   settings,
   status,
   onSaveSettings,
+  onReplayTour,
 }: {
   settings: Settings
   status: Status
   onSaveSettings: (patch: Partial<Settings>) => void
+  /** Re-open the first-run walkthrough. Absent in contexts without the tour (e.g. previews). */
+  onReplayTour?: () => void
 }) {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [micDevices, setMicDevices] = useState<string[]>([])
@@ -309,6 +312,19 @@ export function SettingsView({
             />
           </label>
         </div>
+        <div className="mt-3">
+          <Toggle
+            checked={settings.hotkey_enabled}
+            onChange={(v) => onSaveSettings({ hotkey_enabled: v })}
+            label="Enable the dictation hotkey"
+          />
+          {!settings.hotkey_enabled && (
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              The hotkey is off — AuraScribe won’t start dictation from a keypress until you turn
+              this back on.
+            </p>
+          )}
+        </div>
       </Section>
 
       <Section
@@ -419,6 +435,14 @@ export function SettingsView({
               ]}
             />
           </label>
+          {onReplayTour && (
+            <label className="flex items-center justify-between gap-4">
+              <span className="text-sm">Walkthrough</span>
+              <button onClick={onReplayTour} className="btn-secondary btn-sm">
+                Replay walkthrough
+              </button>
+            </label>
+          )}
         </div>
       </Section>
 

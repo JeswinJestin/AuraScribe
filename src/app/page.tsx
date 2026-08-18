@@ -14,7 +14,7 @@ import { SnippetsView } from '@/components/views/SnippetsView'
 import { InsightsView } from '@/components/views/InsightsView'
 import { RecapView } from '@/components/views/RecapView'
 import { SettingsView } from '@/components/views/SettingsView'
-import { Onboarding } from '@/components/Onboarding'
+import { SpotlightTour } from '@/components/SpotlightTour'
 
 const DEFAULT_STATUS: Status = {
   is_recording: false,
@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS: Settings = {
   // Fallback before real settings load: assume onboarded so the browser preview / a failed
   // read never flashes the walkthrough. A genuine fresh install reports onboarded=false.
   onboarded: true,
+  hotkey_enabled: true,
 }
 
 /** Frameless-window controls. No-op outside Tauri (e.g. the browser preview). */
@@ -64,6 +65,7 @@ export default function App() {
   const [tauri, setTauri] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [historyReloadToken, setHistoryReloadToken] = useState(0)
+  const [replayTour, setReplayTour] = useState(false)
 
   useEffect(() => {
     let offStatus: (() => void) | null = null
@@ -162,24 +164,30 @@ export default function App() {
       root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
   }, [settings.theme])
 
-  if (!ready) return <div className="h-screen w-screen bg-background" />
+  // The walkthrough shows on first run (`onboarded` is false only on a freshly created database —
+  // see the Rust `Database::new` fresh-install path) or when replayed from Settings. It spotlights
+  // the Dictate view, so when it opens, switch there and expand the sidebar so its anchors exist.
+  const tourOpen = ready && ((tauri && !settings.onboarded) || replayTour)
+  useEffect(() => {
+    if (tourOpen) {
+      setView('dictate')
+      setCollapsed(false)
+    }
+  }, [tourOpen])
 
-  // First run only. `onboarded` is false solely on a freshly created database (see the Rust
-  // `Database::new` fresh-install path); returning users and the browser preview never see it.
-  const showOnboarding = tauri && !settings.onboarded
+  if (!ready) return <div className="h-screen w-screen bg-background" />
 
   return (
     // Full-bleed in every appearance — the app fills the frameless window edge to edge.
     // "Glass" is not a smaller box: it is the same full size, but the shell and its cards
     // become frosted glass over a bluish backdrop (see `.glass-bg` in globals.css).
     <div className="h-screen w-screen overflow-hidden">
-      {showOnboarding && (
-        <Onboarding
+      {tourOpen && (
+        <SpotlightTour
           hotkey={settings.hotkey}
-          onFinish={() => saveSettings({ onboarded: true })}
-          onOpenModels={() => {
-            setView('settings')
-            saveSettings({ onboarded: true })
+          onFinish={() => {
+            if (!settings.onboarded) saveSettings({ onboarded: true })
+            setReplayTour(false)
           }}
         />
       )}
@@ -244,7 +252,12 @@ export default function App() {
               {view === 'insights' && <InsightsView onOpenRecap={() => setView('recap')} />}
               {view === 'recap' && <RecapView onBack={() => setView('insights')} />}
               {view === 'settings' && (
-                <SettingsView settings={settings} status={status} onSaveSettings={saveSettings} />
+                <SettingsView
+                  settings={settings}
+                  status={status}
+                  onSaveSettings={saveSettings}
+                  onReplayTour={() => setReplayTour(true)}
+                />
               )}
             </div>
 

@@ -1,0 +1,214 @@
+name: Release
+
+# Build native production bundles for Windows, macOS and Linux in parallel on GitHub's free
+# cloud runners, and attach all of them to a single GitHub Release.
+#
+# Trigger: push a version tag (e.g. `git tag v1.2.0 && git push origin v1.2.0`).
+# `workflow_dispatch` runs the same builds for validation WITHOUT publishing anything, so you
+# can prove a change compiles + bundles on all three OSes before you cut a tag.
+#
+# WHY A MATRIX OF NATIVE RUNNERS (not cross-compilation): Tauri produces a platform-native
+# installer per OS (`.exe` via NSIS, `.dmg`, `.deb` + `.AppImage`), whisper-rs compiles
+# whisper.cpp from source for the host, and sherpa-rs downloads a prebuilt sherpa-onnx + ONNX
+# Runtime for the host target. All three are far simpler and more reliable built on the real OS
+# than cross-compiled — so each matrix row runs on the OS it produces.
+#
+# WHY TWO JOBS: `prepare-release` creates the draft release exactly once, then every `build`
+# job uploads its bundle into that one release. Doing the create inside the parallel matrix
+# would race and spawn duplicate draft releases.
+#
+# HONEST STATE (read docs/HANDOFF.md, 2026-08-18): the WINDOWS build is the proven, shipped one.
+# The macOS/Linux rows build the SAME Rust — but the platform layer (text injection, the global
+# hotkey's startup registration, "open settings folder", accessibility) is currently an explicit
+# "not yet implemented on this platform" stub off Windows, and the sherpa/ONNX shared libs are
+# not yet bundled there. So a macOS/Linux bundle installs and launches but does NOT dictate yet.
+# The release is created as a DRAFT on purpose: nothing goes public until a human reviews it and
+# decides how to label the experimental non-Windows assets.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Required to create the release and upload assets with the gh CLI.
+permissions:
+  contents: write
+
+env:
+  # Compile whisper.cpp on most-but-not-all cores; mirrors the local build scripts' politeness
+  # and keeps memory in check on the runners.
+  CARGO_BUILD_JOBS: '4'
+  CMAKE_BUILD_PARALLEL_LEVEL: '4'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  # -----------------------------------------------------------------------------------------
+  # Create the draft release once (tag pushes only). Idempotent: reruns reuse the same release.
+  # -----------------------------------------------------------------------------------------
+  prepare-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or reuse the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — reusing it."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "AuraScribe $TAG" \
+              --notes $'Draft release.\n\n**Windows** is the proven, supported build.\n\n**macOS / Linux are EXPERIMENTAL previews** (see docs/HANDOFF.md, 2026-08-18): they install and launch, but do not yet dictate into other apps — text injection and the global hotkey are not implemented off Windows. Review the attached assets, decide how to label the non-Windows builds, then publish.'
+            echo "Created draft release $TAG."
+          fi
+
+  # -----------------------------------------------------------------------------------------
+  # Build the native bundle on each OS, in parallel. Runs on workflow_dispatch too (validation),
+  # in which case the upload step is skipped.
+  # -----------------------------------------------------------------------------------------
+  build:
+    needs: prepare-release
+    # Still build on workflow_dispatch, where prepare-release is skipped (no tag). Only bail if
+    # prepare-release actually failed.
+    if: always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped')
+    name: Build ${{ matrix.name }}
+    strategy:
+      # Never cancel the proven Windows build because an experimental macOS/Linux row failed —
+      # we want every platform's result from one run.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (x64)
+            os: windows-latest
+            # Mirror the proven local release exactly: Moonshine feature + the Windows-only
+            # overlay that bundles onnxruntime/sherpa + the MSVC runtime DLLs next to the exe.
+            tauri_args: '--features moonshine --config src-tauri/tauri.moonshine.conf.json'
+            artifacts: |
+              src-tauri/target/release/bundle/nsis/*-setup.exe
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            tauri_args: '--features moonshine'
+            artifacts: |
+              src-tauri/target/release/bundle/dmg/*.dmg
+          - name: Linux (x64)
+            os: ubuntu-latest
+            tauri_args: '--features moonshine'
+            artifacts: |
+              src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/bundle/deb/*.deb
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- Toolchains ---------------------------------------------------------------------
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # ---- Per-OS system dependencies -----------------------------------------------------
+      # Linux: WebKitGTK (webview), GTK, appindicator (tray), ALSA (cpal capture), patchelf
+      # (AppImage), plus clang/libclang + cmake for whisper.cpp's bindgen build.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            file \
+            build-essential \
+            cmake \
+            clang \
+            libclang-dev
+
+      # macOS: Xcode ships clang + libclang; whisper.cpp still needs cmake.
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake
+
+      # Windows: the runner image ships LLVM + CMake; whisper-rs's bindgen just needs libclang.
+      - name: Configure libclang (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+
+      # ---- Build --------------------------------------------------------------------------
+      - name: Install npm dependencies
+        run: npm ci
+
+      # `tauri build` runs `next build` (beforeBuildCommand) for the frontend, then compiles the
+      # Rust and bundles the native installer(s) for this OS.
+      - name: Build the app bundle
+        run: npx tauri build ${{ matrix.tauri_args }}
+
+      # Show exactly what this OS produced, in the run summary — useful while macOS/Linux
+      # bundling is still being dialed in.
+      - name: List produced bundles
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.name }} — produced bundles"
+            echo '```'
+            find src-tauri/target -path '*/bundle/*' -type f 2>/dev/null | sort || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---- Upload (tag pushes only) -------------------------------------------------------
+      # Collect this OS's artifacts, guarantee the Linux AppImage is executable, and upload into
+      # the single draft release created by prepare-release. --clobber makes reruns idempotent.
+      - name: Upload bundles to the draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          TAG="${GITHUB_REF_NAME}"
+
+          # Expand each glob line from the matrix into a real file list.
+          files=()
+          while IFS= read -r pattern; do
+            pattern="$(echo "$pattern" | xargs)"   # trim whitespace
+            [ -z "$pattern" ] && continue
+            for f in $pattern; do
+              [ -e "$f" ] && files+=("$f")
+            done
+          done <<< "${{ matrix.artifacts }}"
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning::No bundles matched for ${{ matrix.name }} — nothing to upload."
+            exit 0
+          fi
+
+          # Open-source distribution: make any AppImage executable before it ships.
+          for f in "${files[@]}"; do
+            case "$f" in
+              *.AppImage) chmod +x "$f"; echo "chmod +x $f" ;;
+            esac
+          done
+
+          printf 'Uploading:\n'; printf '  %s\n' "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
