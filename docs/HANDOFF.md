@@ -146,6 +146,26 @@ library — a tight next iteration. `fail-fast: false` + the draft release exist
 **To ship:** `git push origin master` · `git tag v2.0.0 && git push origin v2.0.0`, then watch the
 Release run. Expect all three green with `.exe` / `.dmg` / `.deb` attached to the draft.
 
+**RESOLVED — all three platforms GREEN (run 32156359386, tag v2.0.0).** Getting there took several
+iterations that each taught something about the CI cache; the fixes that stuck:
+- **Never cache the `target` dir** (`Swatinem/rust-cache` `cache-targets: false`). The recurring
+  Windows `sherpa-onnx-cxx-api.dll doesn't exist` AND the empty macOS embed were the SAME cause: on a
+  warm cache Swatinem prunes sherpa-rs-sys's runtime libs from `target` and the crate isn't rebuilt to
+  re-emit them, so they exist nowhere. A cold `target` every run = the proven first-run behaviour;
+  libs are always freshly copied to `target/release`. (Registry cache kept, so only ~a few min slower.)
+- **`tsconfig.json` must exclude `src-tauri`** — `next build` was type-checking whisper's CMake
+  `compiler_depend.ts` under `target/` and failing with "Invalid character" (only on a warm cache).
+- **macOS: build `--bundles app`, not the dmg** — Tauri's dmg bundler *deletes* the `.app` right after
+  packaging, so the post-build lib-embed found nothing and shipped a 5 MB hollow dmg. Now we build the
+  `.app`, embed only the onnxruntime/sherpa runtime dylibs (name-filtered so no proc-macro plugins),
+  ad-hoc sign, then make the dmg with `hdiutil`. **Proof it worked: the dmg went 5 MB → 48 MB** (macOS
+  job log lists `libonnxruntime.1.17.1.dylib` + `libsherpa-onnx-c-api/cxx-api.dylib` embedded).
+
+**Final asset sizes on the v2.0.0 draft:** `.exe` ~8 MB · `.dmg` ~48 MB (libs inside) · `.deb` ~6 MB
+(no libs — Linux stays a documented preview). **Still needs a real-Mac run to confirm a model loads**
+(the rpath + embedded libs are correct in principle; `install_name` may still need an `install_name_tool`
+pass — the log will name any missing lib). The draft release is unpublished for exactly that review.
+
 ### 2026-08-18 — Spotlight onboarding (interactive walkthrough) — built + verified, HELD
 
 Replaced the old 5-step `Onboarding.tsx` modal with an **interactive spotlight walkthrough** the

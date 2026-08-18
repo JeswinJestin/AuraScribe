@@ -193,10 +193,11 @@ jobs:
           if [ ! -d "$app" ]; then echo "::error::no .app at $app — cannot build the dmg"; ls -R src-tauri/target/release/bundle 2>/dev/null || true; exit 1; fi
           fw="$app/Contents/Frameworks"
           mkdir -p "$fw"
-          # Search the WHOLE release tree (top-level + deps/ + build/*/out) so we catch every copy
-          # sherpa-rs-sys emits. Prune the bundle dir so we don't recurse into the .app itself, then
-          # embed one copy per unique basename. (bash 3.2 on the runner — no associative arrays.)
-          all_libs="$(find src-tauri/target/release -path '*/bundle' -prune -o -name '*.dylib' -type f -print)"
+          # Embed ONLY the sherpa-onnx / ONNX Runtime RUNTIME dylibs — matched by name so we never
+          # sweep in Rust proc-macro plugins from deps/ (libserde_derive, libtokio_macros, …), which
+          # are compiler artifacts, not runtime libs, and must not ship in a distributed app. Prune
+          # the bundle dir so we don't recurse into the .app. (bash 3.2 on the runner — no assoc arrays.)
+          all_libs="$(find src-tauri/target/release -path '*/bundle' -prune -o \( -name 'libonnxruntime*.dylib' -o -name 'libsherpa-onnx-*.dylib' \) -type f -print)"
           count=0
           for base in $(printf '%s\n' "$all_libs" | xargs -n1 basename 2>/dev/null | sort -u); do
             [ -z "$base" ] && continue
