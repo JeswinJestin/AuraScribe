@@ -6,6 +6,8 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
+**🌐 Website: [aurascribe.dev](https://www.aurascribe.dev)** · **[⬇️ Download](https://github.com/JeswinJestin/AuraScribe/releases/latest)** · **[📖 Install guide](docs/INSTALL.md)**
+
 > **v2.0.0 is the first cross-platform release.** Windows is the fully-supported, daily-driver build.
 > **macOS (Apple Silicon) and Linux (.deb) are new previews** — they install, launch, and dictate
 > (global hotkey + typing into other apps), but loading a voice model on those two platforms is still
