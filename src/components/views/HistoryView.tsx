@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, Trash2, Loader2 } from 'lucide-react'
+import { Copy, Check, Trash2, Loader2, Search, X } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { TranscriptEntry, DailyCount } from '@/lib/ipc'
 import { PageHeader, EmptyState, ErrorNote } from '@/components/ui'
@@ -215,6 +215,7 @@ function UsageHeatmap({ counts }: { counts: DailyCount[] }) {
 export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
   const [items, setItems] = useState<TranscriptEntry[]>([])
   const [counts, setCounts] = useState<DailyCount[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -223,8 +224,9 @@ export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
 
   const reload = useCallback(async () => {
     try {
+      const q = searchQuery.trim()
       const [first, daily] = await Promise.all([
-        ipc.getTranscripts(PAGE_SIZE, 0),
+        q ? ipc.searchTranscripts(q, PAGE_SIZE, 0) : ipc.getTranscripts(PAGE_SIZE, 0),
         ipc.transcriptDailyCounts(),
       ])
       setItems(first)
@@ -235,7 +237,7 @@ export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
     } catch (e) {
       setError(String(e))
     }
-  }, [])
+  }, [searchQuery])
 
   useEffect(() => {
     reload()
@@ -244,7 +246,10 @@ export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
   const loadMore = async () => {
     setLoadingMore(true)
     try {
-      const next = await ipc.getTranscripts(PAGE_SIZE, offset)
+      const q = searchQuery.trim()
+      const next = q
+        ? await ipc.searchTranscripts(q, PAGE_SIZE, offset)
+        : await ipc.getTranscripts(PAGE_SIZE, offset)
       setItems((prev) => [...prev, ...next])
       setOffset((o) => o + next.length)
       setHasMore(next.length === PAGE_SIZE)
@@ -259,6 +264,15 @@ export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
     await navigator.clipboard.writeText(item.cleaned_text || item.raw_text)
     setCopiedId(item.id)
     setTimeout(() => setCopiedId(null), 1400)
+  }
+
+  const deleteItem = async (id: number) => {
+    try {
+      await ipc.deleteTranscript(id)
+      setItems((prev) => prev.filter((item) => item.id !== id))
+    } catch (e) {
+      setError(String(e))
+    }
   }
 
   const clearAll = async () => {
@@ -285,7 +299,7 @@ export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
     return out
   }, [items])
 
-  const hasAnything = items.length > 0 || counts.length > 0
+  const hasAnything = items.length > 0 || counts.length > 0 || searchQuery.trim().length > 0
 
   return (
     <div className="flex flex-col gap-4">
@@ -319,34 +333,69 @@ export function HistoryView({ reloadToken = 0 }: { reloadToken?: number }) {
           <div className="flex min-w-0 flex-1 flex-col gap-4">
             <UsageHeatmap counts={counts} />
 
-            {groups.map((group) => (
-              <div key={group.key} className="flex flex-col gap-2">
-                <h2 className="mono px-0.5 pt-1 text-[10px] uppercase tracking-widest text-muted-foreground">
-                  {group.heading}
-                </h2>
-                {group.items.map((item) => (
-                  <div key={item.id} className="panel p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                        {timeOfDay(item.timestamp)}
-                        {item.audio_ms > 0 && ` · ${(item.audio_ms / 1000).toFixed(1)}s`}
-                      </span>
-                      <button onClick={() => copy(item)} className="btn-ghost btn-sm">
-                        {copiedId === item.id ? (
-                          <Check className="h-3 w-3" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
-                        {copiedId === item.id ? 'Copied' : 'Copy'}
-                      </button>
-                    </div>
-                    <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed">
-                      {item.cleaned_text || item.raw_text}
-                    </p>
-                  </div>
-                ))}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search history…"
+                className="input h-9 w-full pl-9 pr-8 text-sm"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                  title="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+
+            {items.length === 0 && searchQuery.trim() ? (
+              <div className="panel p-6 text-center text-sm text-muted-foreground">
+                No dictations match &ldquo;{searchQuery}&rdquo;.
               </div>
-            ))}
+            ) : (
+              groups.map((group) => (
+                <div key={group.key} className="flex flex-col gap-2">
+                  <h2 className="mono px-0.5 pt-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+                    {group.heading}
+                  </h2>
+                  {group.items.map((item) => (
+                    <div key={item.id} className="panel p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                          {timeOfDay(item.timestamp)}
+                          {item.audio_ms > 0 && ` · ${(item.audio_ms / 1000).toFixed(1)}s`}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => copy(item)} className="btn-ghost btn-sm">
+                            {copiedId === item.id ? (
+                              <Check className="h-3 w-3" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
+                            )}
+                            {copiedId === item.id ? 'Copied' : 'Copy'}
+                          </button>
+                          <button
+                            onClick={() => deleteItem(item.id)}
+                            className="btn-ghost btn-sm text-muted-foreground hover:text-destructive"
+                            title="Delete transcript"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed">
+                        {item.cleaned_text || item.raw_text}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ))
+            )}
 
             {hasMore && (
               <div className="flex justify-center pt-1">

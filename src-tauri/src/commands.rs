@@ -879,6 +879,25 @@ pub async fn get_transcripts(
 }
 
 #[command]
+pub async fn search_transcripts(
+    state: tauri::State<'_, AppState>,
+    query: String,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<crate::db::TranscriptRow>, String> {
+    let db = state.db.lock().await;
+    db.search_transcripts(&query, limit, offset)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn delete_transcript(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.delete_transcript(id).await.map_err(|e| e.to_string())
+}
+
+#[command]
 pub async fn clear_transcripts(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let db = state.db.lock().await;
     db.clear_transcripts().await.map_err(|e| e.to_string())

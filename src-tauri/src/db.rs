@@ -311,6 +311,36 @@ impl Database {
         .await
     }
 
+    /// Search transcripts matching `query` in either cleaned or raw text, newest-first.
+    pub async fn search_transcripts(
+        &self,
+        query: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TranscriptRow>, sqlx::Error> {
+        let pattern = format!("%{}%", query);
+        sqlx::query_as::<_, TranscriptRow>(
+            "SELECT id, timestamp, raw_text, cleaned_text, app_name, duration_ms, audio_ms, model_used, created_at
+             FROM transcripts
+             WHERE cleaned_text LIKE $1 OR raw_text LIKE $1
+             ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
+        )
+        .bind(pattern)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Delete a single transcript by its primary key.
+    pub async fn delete_transcript(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM transcripts WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn clear_transcripts(&self) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM transcripts").execute(&self.pool).await?;
         Ok(())

@@ -18,12 +18,55 @@ import { useEffect, useState } from 'react'
 import { SpotlightTour } from '@/components/SpotlightTour'
 import { InsightsView } from '@/components/views/InsightsView'
 import { RecapView } from '@/components/views/RecapView'
+import { HistoryView } from '@/components/views/HistoryView'
 import { recapYear } from '@/components/views/RecapView'
 
 const YEAR = recapYear()
 
 // Representative sample data — a believable few months of daily use, not the owner's real data.
+const MOCK_TRANSCRIPTS = [
+  {
+    id: 1,
+    timestamp: Math.floor(Date.now() / 1000) - 120,
+    raw_text: 'we deployed the new kubernetes cluster today and all pods are healthy',
+    cleaned_text: 'We deployed the new Kubernetes cluster today and all pods are healthy.',
+    app_name: 'Visual Studio Code',
+    duration_ms: 2400,
+    audio_ms: 3200,
+    model_used: 'moonshine-base-en',
+    created_at: Math.floor(Date.now() / 1000) - 120,
+  },
+  {
+    id: 2,
+    timestamp: Math.floor(Date.now() / 1000) - 3600,
+    raw_text: 'git status',
+    cleaned_text: 'Git status',
+    app_name: 'Windows Terminal',
+    duration_ms: 800,
+    audio_ms: 1100,
+    model_used: 'moonshine-base-en',
+    created_at: Math.floor(Date.now() / 1000) - 3600,
+  },
+  {
+    id: 3,
+    timestamp: Math.floor(Date.now() / 1000) - 86400,
+    raw_text: 'react hooks are awesome for managing local component state',
+    cleaned_text: 'React hooks are awesome for managing local component state.',
+    app_name: 'Slack',
+    duration_ms: 2100,
+    audio_ms: 2800,
+    model_used: 'moonshine-base-en',
+    created_at: Math.floor(Date.now() / 1000) - 86400,
+  },
+]
+
 const MOCK: Record<string, unknown> = {
+  get_transcripts: MOCK_TRANSCRIPTS,
+  transcript_daily_counts: [
+    { day: new Date().toISOString().slice(0, 10), count: 5 },
+    { day: new Date(Date.now() - 86400000).toISOString().slice(0, 10), count: 3 },
+  ],
+  delete_transcript: null,
   get_streak_state: {
     streak: 12,
     longest: 21,
@@ -64,17 +107,25 @@ if (typeof window !== 'undefined') {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any
   w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ ?? {}
-  w.__TAURI_INTERNALS__.invoke = async (cmd: string) => {
+  w.__TAURI_INTERNALS__.invoke = async (cmd: string, args?: any) => {
+    if (cmd === 'search_transcripts') {
+      const q = (args?.query ?? '').toLowerCase()
+      return MOCK_TRANSCRIPTS.filter(
+        (t) =>
+          t.raw_text.toLowerCase().includes(q) ||
+          (t.cleaned_text && t.cleaned_text.toLowerCase().includes(q))
+      )
+    }
     if (cmd in MOCK) return MOCK[cmd]
     // Anything else these screens might touch: don't throw, just return empty.
     return null
   }
 }
 
-type Mode = 'onboarding' | 'insights' | 'recap'
+type Mode = 'history' | 'insights' | 'recap' | 'onboarding'
 
 export default function PreviewPage() {
-  const [mode, setMode] = useState<Mode>('onboarding')
+  const [mode, setMode] = useState<Mode>('history')
 
   // Match the real app's default appearance (Glass): light text on dark frosted panels over the
   // bluish backdrop. Same class toggles as src/app/page.tsx.
@@ -85,9 +136,10 @@ export default function PreviewPage() {
   }, [])
 
   const tabs: { id: Mode; label: string }[] = [
-    { id: 'onboarding', label: 'Onboarding' },
-    { id: 'insights', label: 'Insights · Streak' },
+    { id: 'history', label: 'History · Search & Delete' },
+    { id: 'insights', label: 'Insights · Streak Share' },
     { id: 'recap', label: `Recap · ${YEAR}` },
+    { id: 'onboarding', label: 'Onboarding' },
   ]
 
   return (
@@ -109,25 +161,13 @@ export default function PreviewPage() {
           </button>
         ))}
         <span className="ml-auto text-[11px] text-muted-foreground">
-          sample data · not shipped
+          sample data · local testing
         </span>
       </div>
 
-      {mode === 'onboarding' && (
-        <div className="relative h-[calc(100vh-49px)] w-full overflow-hidden">
-          {/* Faux Dictate empty-state so the spotlight step (step 3) has a real anchor to land on,
-              exactly as it would in the app on a fresh install. */}
-          <div className="mx-auto max-w-md pt-16 text-center">
-            <h1 className="font-display text-[28px] font-medium">Add a voice model to begin</h1>
-            <p className="mt-3 text-sm text-muted-foreground">
-              AuraScribe transcribes on this machine, so it needs a speech model installed first. You
-              download it once — after that it works offline, forever.
-            </p>
-            <button data-tour="download-model" className="btn-primary mx-auto mt-6">
-              Choose a model
-            </button>
-          </div>
-          <SpotlightTour hotkey="Ctrl+Shift+Space" onFinish={() => setMode('insights')} />
+      {mode === 'history' && (
+        <div className="mx-auto max-w-3xl px-8 py-10">
+          <HistoryView />
         </div>
       )}
 
@@ -140,6 +180,22 @@ export default function PreviewPage() {
       {mode === 'recap' && (
         <div className="mx-auto max-w-3xl px-8 py-10">
           <RecapView onBack={() => setMode('insights')} />
+        </div>
+      )}
+
+      {mode === 'onboarding' && (
+        <div className="relative h-[calc(100vh-49px)] w-full overflow-hidden">
+          <div className="mx-auto max-w-md pt-16 text-center">
+            <h1 className="font-display text-[28px] font-medium">Add a voice model to begin</h1>
+            <p className="mt-3 text-sm text-muted-foreground">
+              AuraScribe transcribes on this machine, so it needs a speech model installed first. You
+              download it once — after that it works offline, forever.
+            </p>
+            <button data-tour="download-model" className="btn-primary mx-auto mt-6">
+              Choose a model
+            </button>
+          </div>
+          <SpotlightTour hotkey="Ctrl+Shift+Space" onFinish={() => setMode('history')} />
         </div>
       )}
     </div>

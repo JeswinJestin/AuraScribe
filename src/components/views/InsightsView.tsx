@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Flame, Snowflake } from 'lucide-react'
+import { Flame, Snowflake, Share2 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { UsageStats, StreakInfo } from '@/lib/ipc'
 import { PageHeader, Stat, EmptyState, ErrorNote } from '@/components/ui'
 import { recapYear } from '@/components/views/RecapView'
+import { renderAndSaveCard } from '@/lib/shareCard'
 
 /** Typing 40 wpm is a common average; the gap against speaking is the time saved. */
 const TYPING_WPM = 40
@@ -32,12 +33,44 @@ function compactWords(n: number) {
 }
 
 /** Current streak, longest, freeze slots, and today's progress — the habit readout. */
-function StreakCard({ s }: { s: StreakInfo }) {
+function StreakCard({ s, stats }: { s: StreakInfo; stats?: UsageStats | null }) {
   const alive = s.streak > 0
+  const [sharing, setSharing] = useState(false)
+  const [shareMsg, setShareMsg] = useState<string | null>(null)
+
   // Colour means state: the flame reads live (signal-cyan) only when today is already safe;
   // otherwise it is muted so an at-risk day looks at-risk.
   const flameColor = s.today_counted ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))'
   const remaining = Math.max(0, s.min_words_per_day - s.words_today)
+
+  const share = async () => {
+    if (!s || s.streak <= 0) return
+    setSharing(true)
+    setShareMsg(null)
+    try {
+      await renderAndSaveCard({
+        filename: `aurascribe-streak-${s.streak}-days`,
+        kicker: 'AuraScribe · Habit',
+        headline: `${s.streak}`,
+        headlineSub: s.streak === 1 ? 'day active streak' : 'days in a row',
+        stats: [
+          {
+            value: stats ? stats.total_words.toLocaleString() : String(s.words_today),
+            label: 'Words dictated',
+          },
+          { value: `${s.longest} days`, label: 'Longest streak' },
+          { value: `${s.freezes} / ${s.max_freezes}`, label: 'Freezes banked' },
+          { value: String(stats?.active_days ?? '—'), label: 'Active days' },
+        ],
+      })
+      setShareMsg('Saved to Pictures')
+      setTimeout(() => setShareMsg(null), 3000)
+    } catch (e) {
+      setShareMsg(`Could not save: ${e}`)
+    } finally {
+      setSharing(false)
+    }
+  }
 
   return (
     <div className="rounded-[14px] border bg-card p-5">
@@ -74,7 +107,7 @@ function StreakCard({ s }: { s: StreakInfo }) {
         </div>
       </div>
 
-      <div className="mt-4 border-t pt-3 text-[12px]">
+      <div className="mt-4 flex items-center justify-between border-t pt-3 text-[12px]">
         {s.today_counted ? (
           <span>
             <span style={{ color: 'hsl(var(--primary))' }}>Today counts</span>
@@ -87,6 +120,21 @@ function StreakCard({ s }: { s: StreakInfo }) {
             </span>{' '}
             words today — {remaining} more keeps your streak
           </span>
+        )}
+
+        {alive && (
+          <div className="flex items-center gap-2">
+            {shareMsg && <span className="text-[11px] text-muted-foreground">{shareMsg}</span>}
+            <button
+              onClick={share}
+              disabled={sharing}
+              className="btn-ghost btn-sm text-[11px]"
+              title="Save shareable streak card to Pictures"
+            >
+              <Share2 className="h-3 w-3" />
+              {sharing ? 'Saving…' : 'Share card'}
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -205,7 +253,7 @@ export function InsightsView({ onOpenRecap }: { onOpenRecap?: () => void }) {
 
       {streak && (
         <div className="mb-3">
-          <StreakCard s={streak} />
+          <StreakCard s={streak} stats={stats} />
         </div>
       )}
 
