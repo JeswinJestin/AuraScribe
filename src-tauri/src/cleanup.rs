@@ -285,7 +285,14 @@ fn normalize_punctuation(text: &str) -> String {
     if trimmed.is_empty() {
         return trimmed;
     }
-    if !trimmed.ends_with(['.', '?', '!']) {
+
+    // Only force a trailing period on multi-word sentences or recognized questions.
+    // Short fragments (1-2 words like "Kubernetes" or "git status") dictated into search bars
+    // or editors should not have an unwanted period appended.
+    let word_count = trimmed.split_whitespace().count();
+    let has_terminal = trimmed.ends_with(['.', '?', '!']);
+
+    if !has_terminal && (word_count >= 3 || looks_like_question(&trimmed)) {
         format!("{}.", trimmed)
     } else {
         trimmed
@@ -429,6 +436,14 @@ mod tests {
         // A statement then a question, already split by Whisper's own punctuation.
         let out = clean("the tests pass. what should we ship", opts);
         assert_eq!(out, "The tests pass. What should we ship?");
+    }
+
+    #[test]
+    fn short_phrases_preserve_no_period() {
+        let opts = CleanupOptions::default();
+        assert_eq!(clean("kubernetes", opts), "Kubernetes");
+        assert_eq!(clean("git status", opts), "Git status");
+        assert_eq!(clean("react hooks", opts), "React hooks");
     }
 
     /// Prints real before/after pairs so cleanup quality can be eyeballed:

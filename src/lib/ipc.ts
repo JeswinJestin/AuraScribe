@@ -181,8 +181,20 @@ export async function deleteSnippet(id: number): Promise<void> {
 }
 
 // Transcripts
-export async function getTranscripts(limit = 100, offset = 0): Promise<TranscriptEntry[]> {
+export async function getTranscripts(limit = 50, offset = 0): Promise<TranscriptEntry[]> {
   return invoke('get_transcripts', { limit, offset })
+}
+
+export async function searchTranscripts(
+  query: string,
+  limit = 50,
+  offset = 0
+): Promise<TranscriptEntry[]> {
+  return invoke('search_transcripts', { query, limit, offset })
+}
+
+export async function deleteTranscript(id: number): Promise<void> {
+  return invoke('delete_transcript', { id })
 }
 
 export async function clearTranscripts(): Promise<void> {

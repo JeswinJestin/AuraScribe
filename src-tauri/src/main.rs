@@ -283,6 +283,8 @@ fn main() {
             commands::add_app_profile,
             commands::delete_app_profile,
             commands::get_transcripts,
+            commands::search_transcripts,
+            commands::delete_transcript,
             commands::clear_transcripts,
             commands::transcript_daily_counts,
             commands::delete_transcripts_between,

@@ -4,7 +4,7 @@ call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliar
 
 REM bindgen needs libclang; whisper.cpp is compiled with CMake.
 if not defined LIBCLANG_PATH set "LIBCLANG_PATH=C:\Program Files\LLVM\bin"
-set "PATH=C:\Program Files\CMake\bin;%PATH%"
+set "PATH=C:\Program Files\CMake\bin;%USERPROFILE%\.cargo\bin;%PATH%"
 
 REM Build on most-but-not-all cores. A full whisper.cpp compile pinning every thread is the
 REM heaviest sustained load this project produces, and on a thermally limited laptop it
