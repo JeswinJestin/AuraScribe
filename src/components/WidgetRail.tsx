@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
+import { getVersion } from '@tauri-apps/api/app'
 import { Trash2, Loader2 } from 'lucide-react'
 import type { Settings, Status } from '@/lib/ipc'
 import * as ipc from '@/lib/ipc'
@@ -172,6 +173,13 @@ export function WidgetRail({
   const model = status.loaded_model ?? settings.whisper_model
   const hotkey = settings.hotkey.replace(/\+/g, ' + ')
 
+  // Read the real app version from Tauri so this label can never go stale (it used to be a
+  // hardcoded "v1.2.0 · Windows" that drifted out of date and wrongly implied Windows-only).
+  const [version, setVersion] = useState('')
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {})
+  }, [])
+
   const cards: Record<View, ReactNode> = {
     dictate: (
       <>
@@ -269,7 +277,7 @@ export function WidgetRail({
           <Stat value={model} sub="running on this device" />
         </Widget>
         <Widget title="Version">
-          <Body>AuraScribe v1.2.0 · Windows</Body>
+          <Body>{version ? `AuraScribe v${version}` : 'AuraScribe'}</Body>
         </Widget>
       </>
     ),
