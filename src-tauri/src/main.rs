@@ -20,6 +20,7 @@ mod parakeet;
 mod dolphin;
 #[cfg(feature = "moonshine")]
 mod nemo_ctc;
+mod optimize;
 mod overlay;
 mod sound;
 mod streaks;

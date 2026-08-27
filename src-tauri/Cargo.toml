@@ -104,6 +104,11 @@ whisper = ["dep:whisper-rs"]
 # Moonshine + the other sherpa-onnx engines (Parakeet, Dolphin, NeMo-CTC IndicConformer).
 moonshine = ["dep:sherpa-rs", "dep:sherpa-rs-sys"]
 
+# Optional on-device prompt optimization (optimize.rs). Off by default so the standard installer is
+# unaffected. When on, it pulls in the llama.cpp binding (added in the engine task) and enables the
+# real optimizer; without it, optimize_text reports the feature is unavailable.
+prompt = []
+
 # GPU backends. `use_gpu(true)` is requested unconditionally in asr.rs but is a no-op unless
 # one of these is compiled in — which is why transcription runs on CPU by default no matter
 # what hardware is present. Each needs its SDK installed to build:
