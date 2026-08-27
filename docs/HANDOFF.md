@@ -6,7 +6,7 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-08-25 (merged PR #1; **overlay reliability fix**; **PR CI** now runs `cargo test`+`tsc` on every PR (green on the runner); **opt-in spectral noise reduction** (`denoise.rs`, FFT spectral subtraction, off by default, 5 unit tests, 77/0). Overlay + noise-room efficacy need an on-device rebuild/mic to confirm. Prompt-optimization engine = still a spec-first item (needs a local-LLM dependency; not built). See below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-08-27 (**Linux `.deb` fix — bundle the sherpa/onnx `.so`**: a tester's `.deb` died with `error while loading shared libraries: libsherpa-onnx-c-api.so`, and hand-compiling sherpa-onnx to fill the gap then segfaulted (ABI/version mismatch). Root cause: the Linux CI job never bundled the runtime libs (only macOS did). Fixed in `release.yml` — a Linux step injects the **exact** libs this build linked against into `/usr/lib/AuraScribe` (matching build.rs's rpath), sets `$ORIGIN` rpath on each so sherpa finds onnxruntime, and **verifies the layout with `ldd` in CI** before repacking. Ships in the next tag; owner tags + runs the `.deb` to confirm a model loads. See the Linux entry below. ALSO today: **Storage management + lightweight model direction** — new Settings → Storage view (per-model size + delete, totals, DB size) and one-click reclaim of orphaned/partial model downloads; `.part` partials auto-cleaned on startup; found ~6.2 GB of dead Whisper leftovers on the owner's machine that nothing was cleaning up. Prompt-optimization model switched to **Qwen2.5-0.5B (~0.4 GB) default, 1.5B optional** to stay light. `storage.rs` + 6 tests (88/0 total), tsc clean, Storage UI rendered in `/preview`. See the two 2026-08-27 entries below. ALSO earlier today: **prompt-optimization engine — Phase 1 scaffolding SHIPPED**, Tasks 1–4 of the plan: `optimize.rs` intent-adaptive system prompt + `prompt` cargo feature, clipboard `capture_selection`, migration `010` + enable/hotkey settings + UI section, and the `optimize_selection` command wired to a second global hotkey. All sandbox-verifiable and green — 5 optimize tests, `--features prompt` compiles. The **actual LLM call stubs to identity** (echo) until the owner-only Tasks 5–6: wire `llama-cpp-2` + a Qwen2.5-1.5B Q4 GGUF, then build/test on-device. See the 2026-08-27 entry below. Prior: 2026-08-25 — merged PR #1; **overlay reliability fix**; **PR CI** now runs `cargo test`+`tsc` on every PR (green on the runner); **opt-in spectral noise reduction** (`denoise.rs`, FFT spectral subtraction, off by default, 5 unit tests, 77/0). Overlay + noise-room efficacy need an on-device rebuild/mic to confirm. Prompt-optimization engine = still a spec-first item (needs a local-LLM dependency; not built). See below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Prior update:** 2026-08-18 (**v2.0.0** — first cross-platform release: CI now green on Windows/macOS/Linux. Fixed the warm-cache Windows DLL regression, switched Linux to a reliable `.deb`, and made the macOS `.dmg` self-contained: rpath in build.rs + embedded sherpa/ONNX dylibs + ad-hoc signing. New `docs/INSTALL.md` with macOS Gatekeeper steps. README + ARCHITECTURE.md rewritten for cross-platform. macOS/Linux model-loading still needs an on-device check — see below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
@@ -91,6 +91,116 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### 2026-08-27 (later) — Linux `.deb`: bundle the sherpa/onnx shared libraries (fixes missing-lib + segfault)
+
+A tester ran the v2.0.0 Linux `.deb` and hit two failures, both root-caused to one gap:
+1. **`error while loading shared libraries: libsherpa-onnx-c-api.so`** on launch — the lib was neither
+   bundled in the `.deb` nor a `DEBIAN/control` dependency.
+2. **`Segmentation fault (core dumped)` at `Loading Whisper model model=moonshine-base-en`** after they
+   hand-compiled sherpa-onnx to satisfy #1 — an ABI/version mismatch against a library the binary was
+   never linked to.
+
+**Root cause:** the Linux CI job (`release.yml`) built the `.deb` with **no step to bundle the private
+sherpa-onnx / ONNX Runtime `.so`** — only the macOS job embedded its dylibs. HANDOFF had flagged this
+("Linux ships no libs — documented preview"); the tester hit exactly it. build.rs already gives the
+Linux binary the runpath `$ORIGIN/../lib/AuraScribe`, and the binary installs at `/usr/bin/aurascribe`,
+so the libs just needed to land at `/usr/lib/AuraScribe`.
+
+**Fix (in `release.yml`, Linux-only step — Windows/macOS untouched):** after `tauri build --bundles deb`,
+extract the `.deb` (`dpkg-deb -R`), copy the **exact `.so` this build produced** (`libsherpa-onnx-*.so*`
++ `libonnxruntime.so*`, name-matched, bundle dir pruned) into `usr/lib/AuraScribe/`, `patchelf
+--set-rpath '$ORIGIN'` each so **libsherpa finds libonnxruntime beside it** (DT_RUNPATH is not
+transitive — the binary's runpath alone won't resolve a *library's* own deps), add a versioned/unversioned
+`libonnxruntime.so` symlink for whichever soname sherpa references, then repack with `--root-owner-group`.
+Using the build's own libs (not a hand-compiled copy) is what removes the version mismatch behind the
+segfault. **Verified in CI, not just written:** the step runs `ldd` on the binary in the staged layout —
+`$ORIGIN` resolves to `usr/bin`, so `../lib/AuraScribe` points at the libs just placed — and **fails the
+build loudly if any sherpa/onnx lib is still `not found`.** Draft-release notes updated to say Linux now
+ships its libs.
+
+**⚠️ Still owner-verified only:** the `ldd` check proves the *link layout* resolves in CI, but an actual
+**model load on real Linux hardware** can't be run from this Windows box. The owner cuts a new tag
+(current version is 2.0.1 → e.g. `v2.0.2`), then installs the `.deb` on Debian/Ubuntu and confirms
+`moonshine-base-en` loads and dictates. If a lib is still missing, `aurascribe.log` / `ldd` names it.
+**Executable naming** (`/usr/bin/aurascribe` vs package `AuraScribe_*.deb`) is standard Debian convention
+(lowercase binary, CamelCase package) and left as-is — it is cosmetic and changing it risks the rpath +
+the proven Windows exe name.
+
+### 2026-08-27 (later) — Storage management + lightweight-model direction
+
+Owner asked to keep the whole app lightweight — the prompt-optimization model, the installed footprint,
+and the stored transcription data — and to manage on-device storage properly. **Measured the real
+footprint first** (verify by running): the owner's `%LOCALAPPDATA%\AuraScribe` was **8.2 GB**, and the
+breakdown reframed the whole request:
+- **Transcript data (the "words") = 0.88 MB.** A non-issue — text is cheap. There is no reason to prune
+  dictation history to save space, so we don't (it's the user's data / "memories"; keep it).
+- **Models = the entire weight, and ~6.2 GB of it was DEAD** — orphaned Whisper `ggml-*.bin` files from
+  removed engines/experiments (Whisper's `MODELS` catalogue is empty; the app can't use any of them) plus
+  a **stranded 1.5 GB `ggml-*.bin.part`** from a failed download. Nothing ever cleaned these up. That —
+  not the tiny DB — was the actual "efficient management" gap.
+
+**Shipped (all sandbox-verified — 6 new unit tests, 88/0 total, tsc clean, Storage UI rendered in
+`/preview`):**
+- **`src-tauri/src/storage.rs`** (new, pure + unit-tested) — scans the models dir, classifies each entry
+  as **Model** (a name the live catalogue recognises), **Orphan** (a leftover), or **Partial** (`*.part`),
+  measures sizes (recursive for dirs), and reclaims orphan+partial entries. It can **never** delete a
+  catalogue model. Tests cover size/recurse, classification, report totals, reclaim-only-reclaimable,
+  partials-only, and a missing dir. No new dependency (self-cleaning temp dir, not `tempfile`).
+- **`engine.rs`** — `Asr` gains `models_dir()`, `known_on_disk_names()` (catalogue → on-disk basenames),
+  `storage_report(db_bytes)`, and `reclaim_storage()`.
+- **Commands** `get_storage_report` / `reclaim_storage` (`commands.rs`, registered in `main.rs`); DB size
+  = `aurascribe.db` + `-wal` + `-shm`. **Startup** now calls `storage::remove_partials()` so a
+  failed/cancelled download never strands gigabytes again (full orphans are left for a deliberate reclaim).
+- **Settings → Storage** (`SettingsView.tsx`, `ipc.ts` types+wrappers) — a summary (Models / Your data /
+  Total), a highlighted **"Reclaim N GB"** card when orphans/partials exist, and a per-entry list
+  (largest first) labelled Active model / Leftover / Partial, with Delete on active models. `/preview`
+  gained a **Settings · Storage** tab with a realistic storage mock; verified rendering (Models 913 MB ·
+  Your data 880 KB · Total 5.7 GB · Reclaim 4.8 GB).
+- **Prompt-optimization model → lightweight default:** spec + plan updated to **Qwen2.5-0.5B-Instruct Q4
+  (~0.4 GB) as the default**, with **1.5B (~1 GB) optional** for stronger rewrites (same ChatML template,
+  so the engine code is unchanged). This is the owner's "keep it light" call; Task 5 wiring is still owner.
+
+**Owner action available now:** open Settings → Storage and hit **Reclaim** to free ~6.2 GB of dead
+Whisper files immediately (or delete them straight from `%LOCALAPPDATA%\AuraScribe\models`). This needs
+the rebuilt app to appear in the running UI; the reclaim/scan *logic* is proven by the unit tests here.
+
+### 2026-08-27 — prompt-optimization engine: Phase 1 scaffolding shipped (Tasks 1–4)
+
+Executed Tasks 1–4 of `docs/superpowers/plans/2026-08-25-prompt-optimization-engine.md` — the entire
+"optimize selected text into a better prompt, in place" feature **except the actual LLM call**, which
+stubs to identity so the whole pipeline is exercisable end-to-end. All four landed as separate commits
+(`5446809`, `cd3aee8`, `b19e345`) and are **sandbox-verified green**.
+
+- **`src-tauri/src/optimize.rs`** (new) — owns the behavior, model-free and unit-tested. `SYSTEM_PROMPT`
+  is intent-adaptive (infer structured-prompt / cleanup / both from the text) with a hard "never lose
+  the original context, output only the result" rule. `build_prompt()` wraps text in the Qwen2.5/ChatML
+  template. `optimize_text()` is feature-gated: `#[cfg(not(feature = "prompt"))]` → a clean "not
+  available in this build" error; `#[cfg(feature = "prompt")]` → **echoes the input** (identity stub)
+  until the owner wires the model in Task 5. **5 unit tests pass.**
+- **`prompt` cargo feature** (`Cargo.toml`, `= []` for now) — off by default, so the standard installer
+  and existing users are untouched. `mod optimize;` added to `main.rs`.
+- **`injection::capture_selection()`** — saves the clipboard, sends Ctrl/Cmd+C, reads the copied text,
+  restores the clipboard on the background thread (reusing the race-free §8 restore). Windows
+  `send_ctrl_c` mirrors `send_ctrl_v`; macOS/Linux via enigo + arboard. Unit-tested for the read/restore
+  round-trip (the copy keystroke itself isn't unit-testable).
+- **Settings** — migration `010_prompt_optimize.sql` adds `prompt_optimize_enabled` (default off) and
+  `prompt_optimize_hotkey` (empty → code default `Ctrl+Shift+O` / `Super+Shift+O` on macOS). Threaded
+  through `SettingsRow`/`save_settings`, the `Settings` struct, `ipc.ts`, `page.tsx` `DEFAULT_SETTINGS`,
+  and a new **"Prompt optimization"** section in `SettingsView.tsx` (toggle + hotkey capture + a
+  model-download placeholder for Task 6).
+- **`optimize_selection` command + second global hotkey** — `capture_selection()` → `optimize_text()` →
+  `inject_text()` to replace, surfacing "nothing selected" / "model not available" as errors, with an
+  "Optimizing…" status. `hotkey.rs` registers the second shortcut alongside dictation when enabled.
+  Compiles clean under `--features prompt` (and the owner's `--features "moonshine prompt"`).
+
+**⚠️ Deliberately NOT done here — Tasks 5–6 are owner-only (unverifiable from the sandbox):** wiring
+`llama-cpp-2` (a from-source llama.cpp build needing the toolchain + a network fetch) and running a
+~1 GB Qwen2.5-1.5B Q4 GGUF. Until that lands, enabling the feature + pressing the hotkey **replaces the
+selection with itself** (the identity stub) — correct, honest, and enough to prove the hotkey→capture→
+replace plumbing on-device. The owner builds with `moonshine-build.bat --features "moonshine prompt"`,
+drops the GGUF in the models dir, and **judges rewrite quality + latency** (Task 5 Step 3). See the plan
+file for the exact remaining steps.
 
 ### 2026-08-25 — overlay "I hear the sound but see nothing" bug + PR #1 merged
 
