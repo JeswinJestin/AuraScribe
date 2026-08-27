@@ -20,6 +20,8 @@ import { InsightsView } from '@/components/views/InsightsView'
 import { RecapView } from '@/components/views/RecapView'
 import { HistoryView } from '@/components/views/HistoryView'
 import { recapYear } from '@/components/views/RecapView'
+import { SettingsView } from '@/components/views/SettingsView'
+import type { Settings, Status } from '@/lib/ipc'
 
 const YEAR = recapYear()
 
@@ -100,6 +102,83 @@ const MOCK: Record<string, unknown> = {
   },
   // The share button would call this; return a plausible path so the success state renders.
   save_share_image: `C:\\Users\\you\\Pictures\\aurascribe-${YEAR}-recap.png`,
+  // Settings screen reads these on mount.
+  list_audio_devices: ['Default microphone', 'USB Microphone'],
+  get_available_models: [
+    {
+      id: 'moonshine-base-en',
+      name: 'AuraScribe English',
+      engine: 'moonshine',
+      size_mb: 286,
+      multilingual: false,
+      speed: 1,
+      accuracy: 4,
+      recommended: true,
+      downloaded: true,
+      path: null,
+      realtime_factor: 0.15,
+      warning: null,
+    },
+    {
+      id: 'parakeet-v3-multilingual',
+      name: 'AuraScribe European',
+      engine: 'parakeet',
+      size_mb: 671,
+      multilingual: true,
+      speed: 3,
+      accuracy: 5,
+      recommended: false,
+      downloaded: true,
+      path: null,
+      realtime_factor: 0.5,
+      warning: null,
+    },
+  ],
+  // Storage report mirroring a real machine: legitimate models + dead Whisper leftovers + a
+  // stranded partial download — so the "Reclaim" affordance is visible with a meaningful number.
+  get_storage_report: {
+    entries: [
+      { name: 'ggml-large-v3.bin', size_bytes: 3_095_033_483, kind: 'orphan' },
+      { name: 'ggml-large-v3-turbo.bin.part', size_bytes: 1_571_170_194, kind: 'partial' },
+      { name: 'parakeet-v3-multilingual', size_bytes: 671_000_000, kind: 'model' },
+      { name: 'ggml-small.bin', size_bytes: 487_601_967, kind: 'orphan' },
+      { name: 'moonshine-base-en', size_bytes: 286_000_000, kind: 'model' },
+    ],
+    models_bytes: 957_000_000,
+    reclaimable_bytes: 3_095_033_483 + 1_571_170_194 + 487_601_967,
+    db_bytes: 901_120,
+    total_bytes: 957_000_000 + 3_095_033_483 + 1_571_170_194 + 487_601_967 + 901_120,
+  },
+  reclaim_storage: 3_095_033_483 + 1_571_170_194 + 487_601_967,
+}
+
+const MOCK_SETTINGS: Settings = {
+  hotkey: 'Ctrl+Shift+Space',
+  hotkey_mode: 'toggle',
+  whisper_model: 'moonshine-base-en',
+  mic_device: null,
+  ai_cleanup_enabled: true,
+  remove_fillers: true,
+  language: 'en',
+  theme: 'glass',
+  start_at_login: false,
+  sound_cues: true,
+  onboarded: true,
+  hotkey_enabled: true,
+  noise_suppression: false,
+  prompt_optimize_enabled: true,
+  prompt_optimize_hotkey: 'Ctrl+Shift+O',
+}
+
+const MOCK_STATUS: Status = {
+  is_recording: false,
+  is_processing: false,
+  is_model_loaded: true,
+  loaded_model: 'moonshine-base-en',
+  current_text: '',
+  last_error: null,
+  hotkey_mode: 'toggle',
+  ai_cleanup_enabled: true,
 }
 
 // Install the stub at module load (client only), before any component effect runs.
@@ -122,7 +201,7 @@ if (typeof window !== 'undefined') {
   }
 }
 
-type Mode = 'history' | 'insights' | 'recap' | 'onboarding'
+type Mode = 'history' | 'insights' | 'recap' | 'onboarding' | 'settings'
 
 export default function PreviewPage() {
   const [mode, setMode] = useState<Mode>('history')
@@ -140,6 +219,7 @@ export default function PreviewPage() {
     { id: 'insights', label: 'Insights · Streak Share' },
     { id: 'recap', label: `Recap · ${YEAR}` },
     { id: 'onboarding', label: 'Onboarding' },
+    { id: 'settings', label: 'Settings · Storage' },
   ]
 
   return (
@@ -180,6 +260,16 @@ export default function PreviewPage() {
       {mode === 'recap' && (
         <div className="mx-auto max-w-3xl px-8 py-10">
           <RecapView onBack={() => setMode('insights')} />
+        </div>
+      )}
+
+      {mode === 'settings' && (
+        <div className="mx-auto max-w-3xl px-8 py-10">
+          <SettingsView
+            settings={MOCK_SETTINGS}
+            status={MOCK_STATUS}
+            onSaveSettings={() => {}}
+          />
         </div>
       )}
 

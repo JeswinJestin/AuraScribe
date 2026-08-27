@@ -23,6 +23,7 @@ mod nemo_ctc;
 mod optimize;
 mod overlay;
 mod sound;
+mod storage;
 mod streaks;
 mod system;
 mod tray;
@@ -179,6 +180,16 @@ fn main() {
             let db = tauri::async_runtime::block_on(async { Database::new().await })?;
             let asr = Arc::new(engine::Asr::new()?);
 
+            // Reclaim any partial (`*.part`) downloads left by a failed/cancelled fetch — they are
+            // never usable models and would otherwise strand gigabytes silently. Full orphaned
+            // models are left for the user to remove deliberately from Settings → Storage.
+            {
+                let freed = storage::remove_partials(asr.models_dir());
+                if freed > 0 {
+                    tracing::info!("Reclaimed {} bytes of partial downloads on startup", freed);
+                }
+            }
+
             let settings = tauri::async_runtime::block_on(async { db.load_settings().await })?;
 
             sound::set_enabled(settings.sound_cues != 0);
@@ -318,6 +329,8 @@ fn main() {
             commands::get_log_file_path,
             commands::overlay_ready,
             commands::optimize_selection,
+            commands::get_storage_report,
+            commands::reclaim_storage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

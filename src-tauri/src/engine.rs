@@ -214,6 +214,40 @@ impl Asr {
             Ok(())
         }
     }
+
+    /// The shared models directory (where every engine downloads its files).
+    pub fn models_dir(&self) -> &std::path::Path {
+        self.whisper.models_dir()
+    }
+
+    /// The set of on-disk entry names the current catalogue recognises — a model's `get_model_path`
+    /// basename (a subdir name for sherpa engines, `ggml-<id>.bin` for Whisper). Anything in the
+    /// models directory NOT in this set is a leftover the app can no longer use. Includes every
+    /// catalogue model whether or not it is downloaded, so a real (if partial) model is never
+    /// misclassified as an orphan.
+    pub fn known_on_disk_names(&self) -> std::collections::HashSet<String> {
+        self.list_available_models()
+            .iter()
+            .filter_map(|m| {
+                self.get_model_path(&m.id)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .collect()
+    }
+
+    /// A full disk-footprint report: every entry in the models dir classified + measured, plus the
+    /// database size. `db_bytes` is passed in (the command layer knows the DB path).
+    pub fn storage_report(&self, db_bytes: u64) -> crate::storage::StorageReport {
+        let entries = crate::storage::scan_models_dir(self.models_dir(), &self.known_on_disk_names());
+        crate::storage::build_report(entries, db_bytes)
+    }
+
+    /// Delete every orphan + partial download, returning the bytes freed. Never touches a model the
+    /// catalogue recognises.
+    pub fn reclaim_storage(&self) -> u64 {
+        crate::storage::reclaim(self.models_dir(), &self.known_on_disk_names())
+    }
 }
 
 /// Set the single `recommended` model across the whole catalogue.
