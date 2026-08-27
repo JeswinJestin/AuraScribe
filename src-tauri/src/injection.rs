@@ -236,6 +236,45 @@ fn paste_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy the current selection (Cmd+C on macOS, Ctrl+C on Linux) and read it, then restore the
+/// clipboard. Returns the selected text, or `None` if nothing was selected.
+#[cfg(not(target_os = "windows"))]
+pub fn capture_selection() -> Option<String> {
+    use arboard::Clipboard;
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    let mut clipboard = Clipboard::new().ok()?;
+    let previous = clipboard.get_text().ok();
+    let _ = clipboard.set_text(String::new());
+
+    let mut enigo = Enigo::new(&Settings::default()).ok()?;
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    enigo.key(modifier, Direction::Press).ok()?;
+    enigo.key(Key::Unicode('c'), Direction::Click).ok()?;
+    enigo.key(modifier, Direction::Release).ok()?;
+
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    let captured = clipboard.get_text().ok().filter(|s| !s.is_empty());
+
+    if let Some(prev) = previous {
+        let ours = captured.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(RESTORE_DELAY_MS));
+            if let Ok(mut cb) = Clipboard::new() {
+                let now = cb.get_text().ok();
+                if now == ours || now.as_deref() == Some("") {
+                    let _ = cb.set_text(prev);
+                }
+            }
+        });
+    }
+    captured
+}
+
 #[cfg(target_os = "windows")]
 fn send_ctrl_v() -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -276,6 +315,75 @@ fn send_ctrl_v() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// Send Ctrl+C, to copy the current selection to the clipboard. Mirrors `send_ctrl_v`.
+#[cfg(target_os = "windows")]
+fn send_ctrl_c() -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+        VK_CONTROL, VK_C,
+    };
+
+    let key = |vk: VIRTUAL_KEY, up: bool| -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    };
+    let inputs = [
+        key(VK_CONTROL, false),
+        key(VK_C, false),
+        key(VK_C, true),
+        key(VK_CONTROL, true),
+    ];
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err("Could not send Ctrl+C".into());
+    }
+    Ok(())
+}
+
+/// Copy the current selection (Ctrl/Cmd+C) and read it off the clipboard, then restore the user's
+/// clipboard. Returns the selected text, or `None` if nothing was selected. Used by the
+/// optimize-in-place feature, which operates on whatever the user has highlighted.
+#[cfg(target_os = "windows")]
+pub fn capture_selection() -> Option<String> {
+    let previous = read_clipboard_text();
+    // Empty the clipboard first, so "nothing selected" (Ctrl+C is then a no-op) is distinguishable
+    // from "the selection happens to equal the old clipboard".
+    let _ = set_clipboard_text("");
+    if send_ctrl_c().is_err() {
+        if let Some(prev) = previous {
+            let _ = set_clipboard_text(&prev);
+        }
+        return None;
+    }
+    // The copy is asynchronous: the target writes the clipboard when it processes Ctrl+C.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    let captured = read_clipboard_text().filter(|s| !s.is_empty());
+
+    // Restore the user's clipboard on a background thread, only if it still holds what we captured
+    // (or the empty sentinel) — never clobber something they copied meanwhile.
+    if let Some(prev) = previous {
+        let ours = captured.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(RESTORE_DELAY_MS));
+            let now = read_clipboard_text();
+            if now == ours || now.as_deref() == Some("") {
+                let _ = set_clipboard_text(&prev);
+            }
+        });
+    }
+    captured
 }
 
 /// `OpenClipboard` fails immediately if any other process currently holds the clipboard —
