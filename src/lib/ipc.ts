@@ -21,6 +21,10 @@ export interface Settings {
   hotkey_enabled: boolean
   /** When true, spectral noise reduction runs over the audio before transcription. Default false. */
   noise_suppression: boolean
+  /** When true, the prompt-optimization hotkey is registered. Default false. */
+  prompt_optimize_enabled: boolean
+  /** Global shortcut for prompt optimization (distinct from the dictation hotkey). */
+  prompt_optimize_hotkey: string
 }
 
 export interface Status {

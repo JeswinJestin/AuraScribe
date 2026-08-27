@@ -27,6 +27,12 @@ pub struct Settings {
     /// cut steady background noise. Default false — safe, but opt-in since the benefit depends on
     /// the user's mic and environment.
     pub noise_suppression: bool,
+    /// When true, the prompt-optimization hotkey is registered (rewrite the current selection into a
+    /// better prompt, in place). Default false; requires the `prompt` build + a downloaded model to
+    /// actually generate.
+    pub prompt_optimize_enabled: bool,
+    /// The global shortcut for prompt optimization (distinct from the dictation hotkey).
+    pub prompt_optimize_hotkey: String,
 }
 
 /// Platform-appropriate default global shortcut. Always a modifier + a non-alphabet key (a bare
@@ -44,6 +50,19 @@ pub fn default_hotkey() -> String {
     #[cfg(not(target_os = "macos"))]
     {
         "Ctrl+Shift+Space".to_string()
+    }
+}
+
+/// Default hotkey for the prompt-optimization action — a modifier combo distinct from the dictation
+/// hotkey. Windows/Linux `Ctrl+Shift+O`; macOS `Super+Shift+O` (Cmd+Shift+O).
+pub fn default_optimize_hotkey() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        "Super+Shift+O".to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+Shift+O".to_string()
     }
 }
 
@@ -68,6 +87,8 @@ impl Default for Settings {
             onboarded: true,
             hotkey_enabled: true,
             noise_suppression: false,
+            prompt_optimize_enabled: false,
+            prompt_optimize_hotkey: default_optimize_hotkey(),
         }
     }
 }
@@ -128,6 +149,12 @@ async fn load_settings_from_db(db: &Database) -> Result<Settings, String> {
         onboarded: row.onboarded != 0,
         hotkey_enabled: row.hotkey_enabled != 0,
         noise_suppression: row.noise_suppression != 0,
+        prompt_optimize_enabled: row.prompt_optimize_enabled != 0,
+        prompt_optimize_hotkey: if row.prompt_optimize_hotkey.is_empty() {
+            default_optimize_hotkey()
+        } else {
+            row.prompt_optimize_hotkey
+        },
     })
 }
 
@@ -151,6 +178,13 @@ pub async fn save_settings(
     } else {
         crate::hotkey::disable(&app);
     }
+    // The optimize shortcut is independent of the dictation hotkey. Register it AFTER the above,
+    // since both apply() and disable() clear all shortcuts first.
+    if settings.prompt_optimize_enabled {
+        crate::hotkey::register_optimize(&app, &settings.prompt_optimize_hotkey).map_err(|e| {
+            format!("Invalid prompt-optimize hotkey \"{}\": {}", settings.prompt_optimize_hotkey, e)
+        })?;
+    }
 
     {
         let db = state.db.lock().await;
@@ -169,6 +203,8 @@ pub async fn save_settings(
             onboarded: settings.onboarded as i32,
             hotkey_enabled: settings.hotkey_enabled as i32,
             noise_suppression: settings.noise_suppression as i32,
+            prompt_optimize_enabled: settings.prompt_optimize_enabled as i32,
+            prompt_optimize_hotkey: settings.prompt_optimize_hotkey.clone(),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -1168,6 +1204,26 @@ pub async fn get_log_file_path() -> Result<String, String> {
 
 /// Called by the overlay page once it has mounted. Until this arrives the overlay is never
 /// shown, so a page that failed to load cannot park an error box on the user's screen.
+/// Optimize the current selection in place: read the highlighted text, rewrite it into a better
+/// prompt, and replace the selection. Both the copy and the paste happen via the keyboard, so this
+/// acts on whatever window has focus when it runs. Errors (nothing selected, model unavailable) are
+/// returned for the UI to surface.
+#[command]
+pub async fn optimize_selection() -> Result<(), String> {
+    // Capture and inject are CPU/keyboard work; keep them off the async runtime.
+    let selection = tokio::task::spawn_blocking(crate::injection::capture_selection)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(text) = selection else {
+        return Err("Select some text first, then press the shortcut".into());
+    };
+    let optimized = tokio::task::spawn_blocking(move || crate::optimize::optimize_text(&text))
+        .await
+        .map_err(|e| e.to_string())??;
+    crate::injection::TextInjector::new().inject_text(&optimized)?;
+    Ok(())
+}
+
 #[command]
 pub async fn overlay_ready(
     app: AppHandle,

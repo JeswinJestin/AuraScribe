@@ -242,6 +242,20 @@ fn main() {
                 });
             }
 
+            // Register the optional prompt-optimization shortcut (independent of the dictation
+            // hotkey; harmless until the `prompt` build + model are present, when it rewrites the
+            // current selection in place).
+            if settings.prompt_optimize_enabled != 0 {
+                let combo = if settings.prompt_optimize_hotkey.is_empty() {
+                    commands::default_optimize_hotkey()
+                } else {
+                    settings.prompt_optimize_hotkey.clone()
+                };
+                if let Err(e) = hotkey::register_optimize(&app_handle, &combo) {
+                    tracing::warn!("Failed to register prompt-optimize hotkey \"{}\": {}", combo, e);
+                }
+            }
+
             // Keep the app running in the tray when the settings window is closed.
             if let Some(main_window) = app.get_webview_window("main") {
                 let window_handle = main_window.clone();
@@ -303,6 +317,7 @@ fn main() {
             commands::request_accessibility_permission,
             commands::get_log_file_path,
             commands::overlay_ready,
+            commands::optimize_selection,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

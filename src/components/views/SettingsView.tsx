@@ -416,6 +416,33 @@ export function SettingsView({
         </div>
       </Section>
 
+      <Section
+        title="Prompt optimization"
+        description="Select any text and press a shortcut to rewrite it into a better AI prompt, in place. Runs on your device."
+      >
+        <div className="flex flex-col gap-3">
+          <Toggle
+            checked={settings.prompt_optimize_enabled}
+            onChange={(v) => onSaveSettings({ prompt_optimize_enabled: v })}
+            label="Enable the prompt-optimization hotkey"
+            hint="It infers what you want (a structured prompt, a cleanup, or both) and never loses your original context."
+          />
+          {settings.prompt_optimize_enabled && (
+            <label>
+              <span className="mb-1 block text-xs font-medium">Shortcut</span>
+              <HotkeyCapture
+                value={settings.prompt_optimize_hotkey}
+                onChange={(combo) => onSaveSettings({ prompt_optimize_hotkey: combo })}
+              />
+            </label>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            The optimizer model is a separate one-time download (coming soon). Until it is installed,
+            the shortcut reports that the model is not available.
+          </p>
+        </div>
+      </Section>
+
       <Section title="Application">
         <div className="flex flex-col gap-3">
           <Toggle

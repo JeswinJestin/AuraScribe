@@ -45,6 +45,33 @@ pub fn apply(app: &AppHandle, combo: &str, mode: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Register the prompt-optimization shortcut ADDITIVELY (does not unregister the dictation hotkey).
+/// Must be called AFTER `apply`, because `apply` clears all shortcuts first. On trigger it runs the
+/// `optimize_selection` command (read selection → rewrite → replace).
+pub fn register_optimize(app: &AppHandle, combo: &str) -> Result<(), String> {
+    let gs = app.global_shortcut();
+    gs.on_shortcut(combo, move |app, _shortcut, event| {
+        if event.state() == ShortcutState::Pressed {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::commands::optimize_selection().await {
+                    tracing::warn!("Prompt-optimize hotkey failed: {}", e);
+                    // Surface the reason (nothing selected / model missing) via the status error.
+                    let state = app.state::<AppState>();
+                    {
+                        let mut s = state.status.lock().await;
+                        s.last_error = Some(e);
+                    }
+                    let status = { state.status.lock().await.clone() };
+                    crate::commands::emit_status(&app, &status).await;
+                }
+            });
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 async fn toggle_recording(app: &AppHandle) {
     let state = app.state::<AppState>();
     let is_recording = { state.status.lock().await.is_recording };

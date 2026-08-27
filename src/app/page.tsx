@@ -43,6 +43,8 @@ const DEFAULT_SETTINGS: Settings = {
   onboarded: true,
   hotkey_enabled: true,
   noise_suppression: false,
+  prompt_optimize_enabled: false,
+  prompt_optimize_hotkey: 'Ctrl+Shift+O',
 }
 
 /** Frameless-window controls. No-op outside Tauri (e.g. the browser preview). */

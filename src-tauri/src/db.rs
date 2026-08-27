@@ -77,7 +77,8 @@ impl Database {
                 hotkey = $1, hotkey_mode = $2, whisper_model = $3, mic_device = $4,
                 ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
                 theme = $8, start_at_login = $9, sound_cues = $10, onboarded = $11,
-                hotkey_enabled = $12, noise_suppression = $13
+                hotkey_enabled = $12, noise_suppression = $13,
+                prompt_optimize_enabled = $14, prompt_optimize_hotkey = $15
             WHERE id = 1",
         )
         .bind(&s.hotkey)
@@ -93,6 +94,8 @@ impl Database {
         .bind(s.onboarded)
         .bind(s.hotkey_enabled)
         .bind(s.noise_suppression)
+        .bind(s.prompt_optimize_enabled)
+        .bind(&s.prompt_optimize_hotkey)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -576,6 +579,8 @@ pub struct SettingsRow {
     pub onboarded: i32,
     pub hotkey_enabled: i32,
     pub noise_suppression: i32,
+    pub prompt_optimize_enabled: i32,
+    pub prompt_optimize_hotkey: String,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
