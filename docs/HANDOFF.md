@@ -119,10 +119,23 @@ segfault. **Verified in CI, not just written:** the step runs `ldd` on the binar
 build loudly if any sherpa/onnx lib is still `not found`.** Draft-release notes updated to say Linux now
 ships its libs.
 
-**⚠️ Still owner-verified only:** the `ldd` check proves the *link layout* resolves in CI, but an actual
-**model load on real Linux hardware** can't be run from this Windows box. The owner cuts a new tag
-(current version is 2.0.1 → e.g. `v2.0.2`), then installs the `.deb` on Debian/Ubuntu and confirms
-`moonshine-base-en` loads and dictates. If a lib is still missing, `aurascribe.log` / `ldd` names it.
+**VERIFIED IN CI (run 33076617762, branch `fix/linux-deb-and-storage`, all 3 OSes green):** the Linux
+job now **installs the built `.deb` in a clean `ubuntu:24.04` container** (only its declared deps pulled —
+a fresh user's machine, not the dev-heavy runner) and runs `ldd`. Log proof: 3 libs bundled into
+`/usr/lib/AuraScribe` (`libonnxruntime.so` 15.5 MB, `libsherpa-onnx-c-api.so` 5.2 MB,
+`libsherpa-onnx-cxx-api.so` 74 KB), and **`ALL LIBRARIES RESOLVE ON A CLEAN MACHINE ✔`** with
+`libsherpa-onnx-c-api.so`/`libonnxruntime.so` resolving from `/usr/lib/AuraScribe`. The `.deb` grew
+~6 MB → **11 MB** (the libs are inside), mirroring the macOS 5→48 MB proof. Runtime `depends` expanded
+(`libgomp1`, `libayatana-appindicator3-1`, `libstdc++6`, `libgcc-s1`) so a clean machine pulls what the
+bundled libs need. The `.deb` is a downloadable **workflow artifact** (`aurascribe-linux-deb`) — shareable
+with a tester before any release. This definitively closes the missing-`.so` launch crash and the
+ABI-mismatch segfault (we ship the exact libs the binary linked against, so there is nothing to mismatch).
+
+**⚠️ Still needs the friend's hardware:** CI proves the app **installs and every library loads on a clean
+machine** — the reported crash. It does NOT exercise **dictation** (mic capture, the global hotkey,
+keystroke injection) — those need a real Linux desktop. Install with **`sudo apt install
+./AuraScribe_2.0.1_amd64.deb`** (apt resolves the deps; `dpkg -i` does NOT and would reintroduce a
+missing-dep failure). If anything still misbehaves, `aurascribe.log` names it.
 **Executable naming** (`/usr/bin/aurascribe` vs package `AuraScribe_*.deb`) is standard Debian convention
 (lowercase binary, CamelCase package) and left as-is — it is cosmetic and changing it risks the rpath +
 the proven Windows exe name.
