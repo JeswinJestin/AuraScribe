@@ -823,6 +823,49 @@ pub async fn delete_model(state: tauri::State<'_, AppState>, model_id: String) -
     Ok(())
 }
 
+/// Bytes used by the transcript database, including its WAL/SHM sidecars. Mirrors the path
+/// `Database::new` builds (`<data_local>/AuraScribe/aurascribe.db`).
+fn database_bytes() -> u64 {
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("AuraScribe");
+    ["aurascribe.db", "aurascribe.db-wal", "aurascribe.db-shm"]
+        .iter()
+        .map(|name| {
+            std::fs::metadata(data_dir.join(name))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+/// The on-device disk footprint: every models-directory entry classified (real model / orphan /
+/// partial) with sizes, plus the database size. Feeds Settings → Storage.
+#[command]
+pub async fn get_storage_report(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::storage::StorageReport, String> {
+    let asr = state.asr.clone();
+    tokio::task::spawn_blocking(move || {
+        let db_bytes = database_bytes();
+        asr.storage_report(db_bytes)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Delete every orphaned + partial model file, returning the bytes freed. Never removes a model the
+/// catalogue recognises, so the user's chosen models are always safe.
+#[command]
+pub async fn reclaim_storage(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+    let asr = state.asr.clone();
+    let freed = tokio::task::spawn_blocking(move || asr.reclaim_storage())
+        .await
+        .map_err(|e| e.to_string())?;
+    tracing::info!("Reclaimed {} bytes of orphaned/partial models", freed);
+    Ok(freed)
+}
+
 // ---- Dictionary ----
 
 #[derive(Debug, Deserialize)]

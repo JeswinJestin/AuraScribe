@@ -60,6 +60,26 @@ export interface ModelInfo {
   warning: string | null
 }
 
+/** One entry in the models directory, classified for the Storage view. */
+export interface StorageEntry {
+  /** On-disk name (a subdir for sherpa models, a `ggml-*.bin` file for Whisper). */
+  name: string
+  size_bytes: number
+  /** 'model' = a catalogue model (never auto-removed); 'orphan'/'partial' = reclaimable. */
+  kind: 'model' | 'orphan' | 'partial'
+}
+
+export interface StorageReport {
+  entries: StorageEntry[]
+  /** Sum of recognised models. */
+  models_bytes: number
+  /** Sum of orphan + partial entries — what "Reclaim" frees. */
+  reclaimable_bytes: number
+  /** The transcript database (+ its WAL/SHM sidecars). */
+  db_bytes: number
+  total_bytes: number
+}
+
 export interface UsageStats {
   total_dictations: number
   total_words: number
@@ -153,6 +173,16 @@ export async function getAvailableModels(): Promise<ModelInfo[]> {
 
 export async function deleteModel(modelId: string): Promise<void> {
   return invoke('delete_model', { modelId })
+}
+
+/** The on-device disk footprint: models (real + orphaned + partial) and the database. */
+export async function getStorageReport(): Promise<StorageReport> {
+  return invoke('get_storage_report')
+}
+
+/** Delete every orphaned + partial model file; resolves to the bytes freed. */
+export async function reclaimStorage(): Promise<number> {
+  return invoke('reclaim_storage')
 }
 
 // Dictionary

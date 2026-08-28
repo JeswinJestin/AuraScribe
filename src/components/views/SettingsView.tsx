@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Download, Loader2, Check, Trash2, Globe, AlertTriangle } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { ModelInfo, Settings, Status } from '@/lib/ipc'
+import type { ModelInfo, Settings, Status, StorageReport } from '@/lib/ipc'
 import { modelDisplay, EUROPEAN_LANGS } from '@/lib/models'
 import { PageHeader, Section, ErrorNote, Toggle, Select } from '@/components/ui'
 
@@ -74,6 +74,163 @@ function HotkeyCapture({
 
 function speedLabel(speed: number) {
   return ['', 'Fastest', 'Fast', 'Moderate', 'Slow', 'Slowest'][speed] ?? ''
+}
+
+/** Human-readable byte size (binary units). */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let v = n / 1024
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i += 1
+  }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`
+}
+
+/** Settings → Storage: shows the on-device disk footprint (models + data), lets the user delete a
+ *  downloaded model, and reclaims orphaned/partial model files the app can no longer use. */
+function StorageSection({ onChanged }: { onChanged?: () => void }) {
+  const [report, setReport] = useState<StorageReport | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setReport(await ipc.getStorageReport())
+    } catch (e) {
+      setErr(String(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const reclaim = async () => {
+    setBusy('reclaim')
+    setErr(null)
+    try {
+      await ipc.reclaimStorage()
+      await load()
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const removeModel = async (name: string) => {
+    setBusy(name)
+    setErr(null)
+    try {
+      await ipc.deleteModel(name)
+      await load()
+      onChanged?.()
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Section
+      title="Storage"
+      description="What AuraScribe uses on this device. Your transcripts are text, so they take almost no space — the weight is downloaded models."
+    >
+      <div className="flex flex-col gap-3">
+        {err && <ErrorNote>{err}</ErrorNote>}
+
+        {report && (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                ['Models', report.models_bytes],
+                ['Your data', report.db_bytes],
+                ['Total', report.total_bytes],
+              ].map(([label, bytes]) => (
+                <div key={label as string} className="panel p-3">
+                  <div className="text-[11px] text-muted-foreground">{label}</div>
+                  <div className="mono mt-0.5 text-sm font-semibold">{formatBytes(bytes as number)}</div>
+                </div>
+              ))}
+            </div>
+
+            {report.reclaimable_bytes > 0 && (
+              <div className="panel border-primary/40 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">
+                      Reclaim {formatBytes(report.reclaimable_bytes)}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Leftover and partly-downloaded model files the app can no longer use. Safe to
+                      remove — your active models are untouched.
+                    </p>
+                  </div>
+                  <button
+                    onClick={reclaim}
+                    disabled={busy !== null}
+                    className="btn-primary btn-sm shrink-0"
+                  >
+                    {busy === 'reclaim' ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      'Reclaim'
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <ul className="flex flex-col divide-y divide-border">
+              {report.entries.map((e) => (
+                <li key={e.name} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm">{e.name}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {e.kind === 'model'
+                        ? 'Active model'
+                        : e.kind === 'partial'
+                          ? 'Partial download'
+                          : 'Leftover'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="mono text-xs text-muted-foreground">
+                      {formatBytes(e.size_bytes)}
+                    </span>
+                    {e.kind === 'model' && (
+                      <button
+                        onClick={() => removeModel(e.name)}
+                        disabled={busy !== null}
+                        aria-label={`Delete ${e.name}`}
+                        className="btn-secondary btn-sm"
+                      >
+                        {busy === e.name ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {report.entries.length === 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                No models downloaded yet.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </Section>
+  )
 }
 
 export function SettingsView({
@@ -480,6 +637,8 @@ export function SettingsView({
           )}
         </div>
       </Section>
+
+      <StorageSection onChanged={refresh} />
 
       <div className="panel p-4">
         <h2 className="text-sm font-semibold">Your voice stays here</h2>

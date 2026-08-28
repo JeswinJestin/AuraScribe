@@ -20,8 +20,11 @@
   langs (Dolphin). Streaks/insights. 100% offline.
 - **Known weak spot:** Malayalam/Kannada (IndicConformer NeMo-CTC) — accurate only on short, clearly
   spoken, pure-Malayalam input. Degrades on longer utterances and cannot handle English (code-mixing).
-- **Next big things:** C = local prompt-optimization engine (optional model download); a **better
-  multilingual Indic model** (the real fix for Malayalam robustness + code-mixing); B = macOS/Linux.
+- **In flight:** C = local prompt-optimization engine — **Phase 1 scaffolding shipped 2026-08-27**
+  (hotkey → capture selection → optimize → replace, gated behind a `prompt` feature; LLM call stubs to
+  identity until the owner wires `llama-cpp-2` + a Qwen GGUF, Tasks 5–6).
+- **Next big things:** a **better multilingual Indic model** (the real fix for Malayalam robustness +
+  code-mixing); B = macOS/Linux on-device verification.
 
 ---
 
@@ -406,3 +409,86 @@ macOS/Linux — untestable from a Windows box. The rpath + Frameworks embedding 
 but the dylibs' `install_name`s might still need an `install_name_tool` fixup. The next signal is the
 owner tagging `v2.0.0` and running the artifacts on real hardware; `aurascribe.log` will name any
 missing library. Honest label kept: macOS/Linux are previews until a model load is confirmed on-device.
+
+### 2026-08-27 — prompt-optimization engine: Phase 1 scaffolding (Tasks 1–4), LLM call stubbed
+
+**Project C starts landing.** After the 2026-08-25 brainstorm + spec (`docs/superpowers/specs/2026-08-25-prompt-optimization-engine-design.md`)
+and the Phase-1 plan (`docs/superpowers/plans/2026-08-25-prompt-optimization-engine.md`), executed
+**Tasks 1–4** — the whole "optimize selected text into a better prompt, in place" feature *except the
+actual LLM call*. The point of this split: everything here is buildable and unit-testable in the
+sandbox; the one unverifiable piece (a from-source llama.cpp build + a ~1 GB model) is isolated to the
+owner. Three commits (`5446809`, `cd3aee8`, `b19e345`), all green.
+
+- **The design decision that shaped it:** "optimize in place," not "dictate a prompt." Normal dictation
+  still just inserts text; a *second* global hotkey optimizes the current selection and replaces it.
+  The system prompt is **intent-adaptive** — it infers from the text whether the user wants a structured
+  Role/Context/Task/Format prompt, a plain cleanup, or both — with a hard rule to **never lose the
+  original context**. That logic lives in `optimize.rs` as a plain `const` + `build_prompt()`, so it is
+  reviewable and unit-tested with no model present (5 tests).
+- **Gating:** a `prompt` cargo feature (off by default) + an opt-in setting + (Task 6) a separate model
+  download. The default ~8 MB installer and every existing user are untouched until they opt in *and*
+  fetch the model. `optimize_text()` without the feature returns a clean "not available" error; with the
+  feature but no model wired yet, it **echoes the input** — an honest identity stub that still proves the
+  hotkey → clipboard-capture → replace plumbing on real hardware without pretending to optimize.
+- **Reused, not reinvented:** `capture_selection()` piggybacks on the race-free clipboard restore added
+  in the 2026-08-25 clipboard-injection fix; the settings/migration/IPC threading and `HotkeyCapture`
+  follow the existing hotkey-toggle pattern exactly.
+
+**Deliberately left for the owner (Tasks 5–6), per "verify by running, not by reading":** wiring
+`llama-cpp-2` and judging a real Qwen2.5 Q4 rewrite. The `llama-cpp-2` API compiles from source and
+tends to need small adjustments on first build — writing that binding blind in the sandbox would be
+exactly the unverifiable code this project's honesty rule warns against, so it stops at a tested stub and
+a clear handoff rather than guessing. The owner builds `--features "moonshine prompt"`, drops a GGUF in
+the models dir, and rates the output; the system prompt / sampling then iterate against real results.
+
+### 2026-08-27 (later) — storage management: the 8.2 GB folder that was 6.2 GB dead
+
+When the prompt-model question came up, the owner reframed it into a broader priority: **keep everything
+lightweight** — the optimizer model, the install, and the stored data — and manage on-device storage
+properly. Rather than guess, we **measured** (`du -sh` on the real `%LOCALAPPDATA%\AuraScribe`), and the
+numbers rewrote the whole task:
+
+- The **transcript database — the thing you'd assume grows — was 0.88 MB** after 271 dictations. Text is
+  cheap; the user's history is not a storage problem and shouldn't be pruned to "save space." Honest
+  finding, told plainly, so we *didn't* build retention/auto-delete nobody needed.
+- The **models folder was ~8 GB, and ~6.2 GB of it was dead**: orphaned Whisper `ggml-*.bin` files left
+  over from engines we removed rounds ago (the Whisper catalogue is empty — the app literally can't select
+  them), plus a **1.5 GB `*.part` from a failed download that nothing ever cleaned up.** That was the real
+  "efficient management" gap — not the DB.
+
+So the feature became **model-storage management**, not data pruning. New `storage.rs` (pure, six unit
+tests, no new dependency) classifies every models-dir entry as Model / Orphan / Partial, sums sizes, and
+reclaims only the orphans + partials — it can never touch a catalogue model. A Settings → Storage view
+surfaces the footprint and a one-click "Reclaim N GB"; startup now sweeps `*.part` so a failed download
+can't strand gigabytes again. Verified by running: 88/0 tests, and the view rendered in `/preview`
+(Total 5.7 GB, Reclaim 4.8 GB on the sample). **Lesson reinforced:** measure before you design — the
+obvious suspect (the DB) was 0.09% of the footprint; the real cost was leftovers no cleanup path owned.
+
+Same session, the owner set the **prompt-optimization model direction to lightweight-first**: default
+**Qwen2.5-0.5B-Instruct Q4 (~0.4 GB)** instead of 1.5B, with **1.5B (~1 GB) kept as an optional
+higher-quality download**. Same ChatML template, so `optimize.rs` is unchanged; only the spec/plan and the
+future download UI differ. Consistent with the standing rule: light + fast + accurate, reject the heavy
+default.
+
+### 2026-08-27 (later) — Linux `.deb` finally carries its libraries (missing-`.so` + segfault, one cause)
+
+A tester gave the v2.0.0 Linux `.deb` its first real run on hardware and it failed twice: launch died with
+`error while loading shared libraries: libsherpa-onnx-c-api.so`, and when they hand-compiled sherpa-onnx
+to get past that, it **segfaulted at `Loading Whisper model moonshine-base-en`**. Two symptoms, one root
+cause: the Linux CI job packaged the binary but **never bundled the private sherpa-onnx / ONNX Runtime
+`.so`** — only the macOS job had ever embedded its dylibs. The segfault was the tell: a hand-built
+sherpa-onnx is a *different* library than the one sherpa-rs-sys linked against, so the C++/ONNX ABI didn't
+line up. The lesson from the macOS work applied verbatim — **ship the exact libs the build produced, so
+there is nothing to mismatch.**
+
+The fix mirrors the macOS embed but for the `.deb`: extract, drop the build's own
+`libsherpa-onnx-*.so*` + `libonnxruntime.so*` into `/usr/lib/AuraScribe` (the dir build.rs's rpath already
+points at), repack. The non-obvious detail was **transitive resolution**: the binary's `DT_RUNPATH` finds
+libsherpa, but RUNPATH is *not* transitive, so libsherpa couldn't then find libonnxruntime beside it —
+fixed by `patchelf --set-rpath '$ORIGIN'` on each bundled lib. And rather than ship on hope, the CI step
+**runs `ldd` against the staged layout and fails the build if any sherpa/onnx lib is still unresolved** —
+`$ORIGIN` resolves to the staged `usr/bin`, so the check exercises the real install paths. That is as far
+as "verify by running" reaches from CI; the last mile — a model actually loading — is the owner tagging a
+new version and running the `.deb` on Debian/Ubuntu. Left the lowercase `/usr/bin/aurascribe` binary name
+alone: the package-name-vs-binary-name mismatch the tester noted is ordinary Debian convention, and
+renaming would fight both the rpath and the proven Windows exe name.

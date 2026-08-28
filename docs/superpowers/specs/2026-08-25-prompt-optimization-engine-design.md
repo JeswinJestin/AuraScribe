@@ -96,8 +96,11 @@ examples live in `optimize.rs` and are unit-testable independently of the model.
 - **Runtime:** llama.cpp via a Rust binding, compiled into the release build (adds ~1–3 MB to the
   binary — the model, not the engine, is the heavy part). Reuses the project's existing
   CMake/C++-from-source build pattern (whisper.cpp).
-- **Model:** **Qwen2.5-1.5B-Instruct**, 4-bit quantized GGUF (~1 GB). Apache-2.0 licensed — clean for an
-  open-source app. Small and fast enough for CPU prompt-rewriting (a few seconds).
+- **Model (lightweight-first — owner decision 2026-08-27):** default **Qwen2.5-0.5B-Instruct**, 4-bit
+  quantized GGUF (**~0.4 GB**). Apache-2.0 licensed — clean for an open-source app. Chosen to keep the
+  download and CPU load light per the project's "light + fast + accurate" rule; good enough for prompt
+  cleanup/structuring. **Qwen2.5-1.5B-Instruct Q4 (~1 GB)** remains an optional "higher quality" download
+  for stronger rewrites. Same ChatML template, so the engine code is identical for both.
 - **Delivery:** optional on-demand download from Hugging Face into the models dir, via the existing
   download infra (`.part` → rename on completion). The feature no-ops with a "download the model" hint
   until the file is present. Default installer stays small; feature dormant until opted into.

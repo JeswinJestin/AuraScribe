@@ -64,7 +64,7 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
               --title "AuraScribe $TAG" \
-              --notes $'Draft release.\n\n**Windows (.exe)** is the proven, fully-supported build.\n\n**macOS (.dmg, Apple Silicon)** and **Linux (.deb)** are cross-platform previews: dictation logic (global hotkey, keystroke/clipboard injection) is now implemented on all three OSes. The macOS build embeds the sherpa/ONNX libraries and is ad-hoc signed. macOS installation needs the Gatekeeper steps in docs/INSTALL.md (the app is not notarized). Model loading on macOS/Linux still needs on-device verification — review the assets, test, then publish.'
+              --notes $'Draft release.\n\n**Windows (.exe)** is the proven, fully-supported build.\n\n**macOS (.dmg, Apple Silicon)** and **Linux (.deb)** are cross-platform previews: dictation logic (global hotkey, keystroke/clipboard injection) is implemented on all three OSes, and BOTH now ship their sherpa-onnx / ONNX Runtime libraries inside the bundle (macOS in Contents/Frameworks, ad-hoc signed; Linux in /usr/lib/AuraScribe with the exact libs the binary linked against, so there is no version mismatch to segfault on). macOS installation needs the Gatekeeper steps in docs/INSTALL.md (the app is not notarized). Model loading on macOS/Linux still needs on-device verification — review the assets, test, then publish.'
             echo "Created draft release $TAG."
           fi
 
@@ -86,6 +86,7 @@ jobs:
         include:
           - name: Windows (x64)
             os: windows-latest
+            artifact_name: aurascribe-windows-exe
             # Mirror the proven local release exactly: Moonshine feature + the Windows-only
             # overlay that bundles onnxruntime/sherpa + the MSVC runtime DLLs next to the exe.
             tauri_args: '--features moonshine --config src-tauri/tauri.moonshine.conf.json'
@@ -93,6 +94,7 @@ jobs:
               src-tauri/target/release/bundle/nsis/*-setup.exe
           - name: macOS (Apple Silicon)
             os: macos-latest
+            artifact_name: aurascribe-macos-dmg
             # Build ONLY the .app (not the .dmg): Tauri's dmg bundler deletes the .app right after
             # packaging it, which left no bundle for the lib-embed step to patch. We build the .app,
             # embed the sherpa dylibs + sign it, then create the .dmg ourselves in a later step.
@@ -101,6 +103,7 @@ jobs:
               src-tauri/target/release/bundle/dmg/*.dmg
           - name: Linux (x64)
             os: ubuntu-latest
+            artifact_name: aurascribe-linux-deb
             # .deb only. The AppImage path relies on linuxdeploy, which needs FUSE that GitHub's
             # runners don't provide; even with APPIMAGE_EXTRACT_AND_RUN it fails to resolve the loose
             # sherpa/onnx .so libs, so it is dropped from CI until the packaging is stabilised. The
@@ -220,6 +223,136 @@ jobs:
           hdiutil create -volname "AuraScribe" -srcfolder "$staging" -ov -format UDZO \
             "$out/AuraScribe_${ver}_aarch64.dmg"
           echo "repacked dmg:"; ls -la "$out"
+
+      # Linux: Tauri's .deb ships the binary but NOT its private sherpa-onnx / ONNX Runtime shared
+      # libraries, so it died at launch with `error while loading shared libraries:
+      # libsherpa-onnx-c-api.so`. (A tester who hand-compiled their own sherpa-onnx to fill the gap
+      # then hit a Segmentation fault — an ABI/version mismatch against a library this binary was
+      # never linked to.) The robust fix is to ship the EXACT libs THIS build produced, so there is
+      # nothing to mismatch. build.rs gives the binary a runpath of `$ORIGIN/../lib/AuraScribe`, and
+      # the binary installs at /usr/bin/aurascribe, so inject those libs into /usr/lib/AuraScribe
+      # inside the .deb and repack. Each lib also gets its own `$ORIGIN` rpath so libsherpa can find
+      # libonnxruntime beside it (DT_RUNPATH is not transitive — the binary's runpath alone won't
+      # resolve a lib's own dependencies). BEST-EFFORT from CI: the layout is verified here with
+      # `ldd`, but a real model load still needs an on-device run.
+      - name: Bundle sherpa/onnx libs into the .deb
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' | head -n1)"
+          if [ -z "$deb" ]; then echo "::error::no .deb produced"; ls -R src-tauri/target/release/bundle 2>/dev/null || true; exit 1; fi
+          echo "Patching $deb"
+
+          # The runtime .so files this build linked against. Name-matched so we never sweep in
+          # unrelated build artifacts; prune the bundle dir so we don't recurse into staged copies.
+          libs="$(find src-tauri/target/release -path '*/bundle' -prune -o \
+                    \( -name 'libonnxruntime*.so*' -o -name 'libsherpa-onnx-*.so*' \) -type f -print)"
+          if [ -z "$libs" ]; then
+            echo "::error::no sherpa/onnx .so found in target/release — cannot bundle"
+            find src-tauri/target -name '*.so*' 2>/dev/null | sort || true
+            exit 1
+          fi
+
+          work="$(mktemp -d)"
+          dpkg-deb -R "$deb" "$work"                # extract control + data, preserving depends
+          libdir="$work/usr/lib/AuraScribe"          # matches build.rs rpath: $ORIGIN/../lib/AuraScribe
+          mkdir -p "$libdir"
+
+          count=0
+          for base in $(printf '%s\n' "$libs" | xargs -n1 basename | sort -u); do
+            src="$(printf '%s\n' "$libs" | grep "/$base$" | head -n1)"
+            [ -z "$src" ] && continue
+            cp -fL "$src" "$libdir/$base"
+            chmod 644 "$libdir/$base"
+            # Each lib resolves its siblings (e.g. sherpa -> onnxruntime) from its own directory.
+            patchelf --set-rpath '$ORIGIN' "$libdir/$base" || echo "::warning::patchelf rpath failed for $base"
+            count=$((count+1)); echo "bundled $base (from $src)"
+          done
+          echo "bundled $count .so into /usr/lib/AuraScribe"
+          [ "$count" -eq 0 ] && { echo "::error::nothing bundled"; exit 1; }
+
+          # ONNX Runtime is often NEEDED by its versioned soname; make sure both an unversioned and a
+          # versioned name exist so whichever the sherpa libs reference resolves.
+          ( cd "$libdir"
+            for f in libonnxruntime.so.*; do
+              [ -e "$f" ] || continue
+              [ -e libonnxruntime.so ] || ln -s "$f" libonnxruntime.so
+            done
+            if [ -e libonnxruntime.so ] && ! ls libonnxruntime.so.* >/dev/null 2>&1; then
+              real="$(readlink -f libonnxruntime.so || true)"; :  # unversioned only — leave as is
+            fi
+          )
+
+          # VERIFY the layout resolves before repacking. $ORIGIN in the binary's runpath resolves to
+          # the binary's real dir at ldd time (work/usr/bin), so ../lib/AuraScribe points at exactly
+          # the libs we just placed — this actually proves the install layout, not just its presence.
+          echo "== binary dynamic section =="
+          readelf -d "$work/usr/bin/aurascribe" | grep -iE 'rpath|runpath|NEEDED.*(sherpa|onnx)' || true
+          echo "== ldd against the bundled layout =="
+          ldd "$work/usr/bin/aurascribe" || true
+          if ldd "$work/usr/bin/aurascribe" 2>/dev/null | grep -iE 'sherpa|onnxruntime' | grep -qi 'not found'; then
+            echo "::error::a sherpa/onnx library is still unresolved after bundling"
+            ldd "$work/usr/bin/aurascribe" | grep -i 'not found' || true
+            exit 1
+          fi
+
+          # Repack (xz, matching Tauri's default). Control/depends are preserved from the extract.
+          # --root-owner-group forces the archived files to root:root, so the rebuilt .deb installs
+          # like a normal package (a raw `dpkg-deb -R` leaves them owned by the CI user otherwise).
+          dpkg-deb -Zxz --root-owner-group --build "$work" "$deb"
+          echo "== repacked contents (app libs + binary) =="
+          dpkg-deb -c "$deb" | grep -E 'usr/lib/AuraScribe|usr/bin/aurascribe' || true
+          # Expose the .deb path to later steps.
+          echo "DEB_PATH=$deb" >> "$GITHUB_ENV"
+
+      # THE decisive test: install the .deb in a CLEAN Ubuntu container (only its declared depends
+      # get pulled — exactly a fresh user's machine, NOT this dev-tool-laden runner) and confirm the
+      # dynamic loader resolves EVERY library, including the bundled sherpa/onnx libs and their own
+      # runtime deps (libgomp for ONNX Runtime's OpenMP, etc.). This is what catches "installs, opens,
+      # then crashes on model load" before it ever reaches a user: a single `not found` fails the build.
+      - name: Smoke-test the .deb on a clean machine (install + ldd)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="${DEB_PATH}"   # relative to the workspace, e.g. src-tauri/target/release/bundle/deb/x.deb
+          echo "Testing $deb in a clean ubuntu:24.04 container"
+          docker run --rm -v "$PWD:/w" -e DEB="/w/$deb" ubuntu:24.04 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            # Install the package and let apt pull its declared dependencies from the archive.
+            apt-get install -y -qq "$DEB"
+            echo "== installed layout =="
+            ls -l /usr/bin/aurascribe /usr/lib/AuraScribe || true
+            echo "== ldd /usr/bin/aurascribe (clean machine) =="
+            ldd /usr/bin/aurascribe || true
+            missing="$(ldd /usr/bin/aurascribe 2>/dev/null | grep -i "not found" || true)"
+            # Also verify the bundled libs resolve THEIR own dependencies (transitive: sherpa -> onnx -> libgomp).
+            for so in /usr/lib/AuraScribe/*.so*; do
+              [ -e "$so" ] || continue
+              m="$(ldd "$so" 2>/dev/null | grep -i "not found" || true)"
+              [ -n "$m" ] && missing="$missing"$'\n'"($so) $m"
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::unresolved libraries on a clean machine — the app would crash at model load:"
+              echo "$missing"
+              exit 1
+            fi
+            echo "ALL LIBRARIES RESOLVE ON A CLEAN MACHINE ✔"
+          '
+
+      # Save the built bundle as a downloadable workflow artifact for EVERY run (tag or manual
+      # dispatch), so a fixed .deb can be pulled straight from the run and shared with a tester
+      # BEFORE any public release is cut.
+      - name: Upload bundle as a shareable artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: warn
+          retention-days: 14
 
       # Show exactly what this OS produced, in the run summary — useful while macOS/Linux
       # bundling is still being dialed in.
