@@ -41,9 +41,25 @@ export default function OverlayPage() {
       // overlay as part of handling this call — see `overlay_ready` in commands.rs.
       overlayReady().catch(() => {})
     })
+
+    // Resume hook. After the machine sleeps and wakes, Windows' WebView2 can suspend this hidden
+    // webview so that when the backend shows the overlay again it paints blank — the pill never
+    // appears even though recording started (only the sound plays). `overlay::show` calls this via
+    // `window.eval` right after showing, which forces the webview to resume and re-read the
+    // authoritative status so the pill repaints. See docs/HANDOFF.md (overlay-after-sleep).
+    const refresh = () => {
+      getStatus()
+        .then((s) => {
+          if (!cancelled) setStatus({ is_recording: s.is_recording, is_processing: s.is_processing })
+        })
+        .catch(() => {})
+    }
+    ;(window as unknown as { __auraOverlayRefresh?: () => void }).__auraOverlayRefresh = refresh
+
     return () => {
       cancelled = true
       unlisten?.()
+      delete (window as unknown as { __auraOverlayRefresh?: () => void }).__auraOverlayRefresh
     }
   }, [])
 
