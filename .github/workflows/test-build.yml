@@ -53,10 +53,37 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # The Moonshine overlay config bundles the sherpa/onnxruntime + MSVC runtime DLLs next to the
-      # exe (same as the proven Windows release). The `prompt` feature adds the llama.cpp optimizer.
-      - name: Build the Windows installer (moonshine + prompt)
-        run: npx tauri build --features "moonshine,prompt" --config src-tauri/tauri.moonshine.conf.json
+      # The Moonshine overlay config lists the sherpa/onnxruntime DLLs as bundle resources at
+      # target/release/*.dll. Tauri's build.rs validates those resources EXIST, but on a clean build
+      # sherpa-rs-sys emits them under target/release/deps or build/*/out and cargo only copies them
+      # to target/release at final-link time — AFTER build.rs runs. The longer llama.cpp compile
+      # (added by `prompt`) perturbed the timing enough to expose this: `onnxruntime.dll doesn't
+      # exist`. Fix: a first `cargo build` runs sherpa-rs-sys's build script (emitting the DLLs
+      # somewhere under target), we copy them up to target/release, THEN Tauri's resource check +
+      # bundle both find them.
+      - name: Build sherpa deps + place runtime DLLs, then bundle
+        shell: bash
+        run: |
+          set -o pipefail
+          cd src-tauri
+          echo "== pass 1: compile deps so sherpa-rs-sys emits its runtime DLLs (may fail at Tauri's resource check — that's fine) =="
+          cargo build --release --features "moonshine,prompt" || echo "::notice::pass-1 cargo build did not fully succeed (expected — placing DLLs next)"
+          echo "== locate the sherpa / onnxruntime DLLs cargo produced =="
+          found="$(find target/release -maxdepth 4 \( -iname 'onnxruntime*.dll' -o -iname 'sherpa-onnx-*.dll' \) 2>/dev/null | sort -u)"
+          echo "$found"
+          if [ -z "$found" ]; then echo "::error::no sherpa/onnx DLLs found under target/release — sherpa-rs-sys did not emit them"; exit 1; fi
+          echo "== copy them to target/release (where the bundle resource check expects them) =="
+          while IFS= read -r dll; do
+            [ -z "$dll" ] && continue
+            base="$(basename "$dll")"
+            if [ ! -e "target/release/$base" ] || [ "$dll" != "target/release/$base" ]; then
+              cp -f "$dll" "target/release/$base" 2>/dev/null || true
+            fi
+          done <<< "$found"
+          ls -la target/release/*.dll 2>/dev/null || true
+          echo "== pass 2: the real bundle =="
+          cd ..
+          npx tauri build --features "moonshine,prompt" --config src-tauri/tauri.moonshine.conf.json
 
       - name: Upload installer artifact
         if: always()
