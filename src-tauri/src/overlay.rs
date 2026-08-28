@@ -96,12 +96,21 @@ pub fn show(app: &AppHandle) {
         tracing::warn!("Overlay page not ready yet; it will appear once the page loads (overlay_ready)");
         return;
     }
+    // A sleep/resume cycle can leave the window minimized or with a stale state; undo that before
+    // positioning so it can actually appear.
+    let _ = window.unminimize();
     position(&window);
     let _ = window.show();
     // Re-assert on-top on every show: another always-on-top window (or the OS) can drop the flag,
     // which would leave the indicator technically shown but hidden behind the user's app.
     let _ = window.set_always_on_top(true);
-    tracing::debug!("Overlay indicator shown");
+    // After the machine sleeps and wakes, Windows' WebView2 can suspend this hidden webview, so
+    // showing it reveals a BLANK transparent window — the pill never paints even though recording
+    // started (the owner's "sound plays but no overlay after sleep" report). Running script forces
+    // the webview to resume, and the page's refresh hook re-reads authoritative status and repaints
+    // the pill. Harmless when the webview was already awake. See docs/HANDOFF.md.
+    let _ = window.eval("window.__auraOverlayRefresh && window.__auraOverlayRefresh()");
+    tracing::info!("Overlay indicator shown");
 }
 
 pub fn hide(app: &AppHandle) {

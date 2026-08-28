@@ -1,0 +1,68 @@
+name: Test Build (Windows, prompt feature)
+
+# Manual-only. Builds the Windows installer WITH the optional on-device prompt-optimizer
+# (`--features moonshine,prompt`) and uploads it as a downloadable artifact, so the owner can
+# test the prompt-optimization feature on a real machine before it ships.
+#
+# WHY THIS EXISTS SEPARATELY from release.yml: the `prompt` feature links llama.cpp, and whisper.cpp
+# (always compiled) ALSO vendors ggml — so this build is where we find out whether the two ggml
+# copies collide at link time on MSVC. Keeping it out of the release matrix means an experimental
+# prompt build can never accidentally ship, and a link failure here does not touch the proven
+# release pipeline.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: '4'
+  CMAKE_BUILD_PARALLEL_LEVEL: '4'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  windows-prompt:
+    name: Windows installer (moonshine + prompt)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Same cache policy as release.yml: never cache the target dir (sherpa-rs-sys emits its runtime
+      # DLLs into target/release only while its build script runs; a warm target prunes them).
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-targets: false
+
+      - name: Configure libclang (Windows)
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # The Moonshine overlay config bundles the sherpa/onnxruntime + MSVC runtime DLLs next to the
+      # exe (same as the proven Windows release). The `prompt` feature adds the llama.cpp optimizer.
+      - name: Build the Windows installer (moonshine + prompt)
+        run: npx tauri build --features "moonshine,prompt" --config src-tauri/tauri.moonshine.conf.json
+
+      - name: Upload installer artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurascribe-windows-prompt-exe
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: warn
+          retention-days: 14

@@ -54,6 +54,15 @@ sherpa-rs = { version = "0.6.8", optional = true, features = ["download-binaries
 # safe wrapper for. Used by nemo_ctc.rs to run AI4Bharat IndicConformer (Malayalam/Kannada/...).
 sherpa-rs-sys = { version = "0.6.8", optional = true }
 
+# On-device prompt optimizer (optimize.rs, `prompt` feature). llama.cpp binding, built from source
+# like whisper.cpp (needs CMake + a C++ toolchain). `encoding_rs` handles the streaming UTF-8 decode
+# of generated tokens. VERSION PINNED EXACTLY: the llama-cpp-2 API shifts between 0.1.x releases, and
+# the llm module in optimize.rs is written against 0.1.150 — bump both together and adjust that module
+# if you change it. See the Task-5 build notes in the plan for the whisper.cpp/llama.cpp ggml
+# symbol-collision caveat.
+llama-cpp-2 = { version = "=0.1.150", optional = true }
+encoding_rs = { version = "0.8", optional = true }
+
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
 
@@ -105,9 +114,9 @@ whisper = ["dep:whisper-rs"]
 moonshine = ["dep:sherpa-rs", "dep:sherpa-rs-sys"]
 
 # Optional on-device prompt optimization (optimize.rs). Off by default so the standard installer is
-# unaffected. When on, it pulls in the llama.cpp binding (added in the engine task) and enables the
-# real optimizer; without it, optimize_text reports the feature is unavailable.
-prompt = []
+# unaffected. When on, it pulls in the llama.cpp binding + the UTF-8 decoder and enables the real
+# optimizer; without it, optimize_text reports the feature is unavailable.
+prompt = ["dep:llama-cpp-2", "dep:encoding_rs"]
 
 # GPU backends. `use_gpu(true)` is requested unconditionally in asr.rs but is a no-op unless
 # one of these is compiled in — which is why transcription runs on CPU by default no matter
