@@ -470,6 +470,30 @@ higher-quality download**. Same ChatML template, so `optimize.rs` is unchanged; 
 future download UI differ. Consistent with the standing rule: light + fast + accurate, reject the heavy
 default.
 
+### 2026-08-28 — v2.0.2 published: Linux verified on hardware; new accuracy issue opened
+
+The Linux `.deb` fix got its real-hardware test and **passed**: a friend installed the CI-built `.deb`,
+downloaded a model, and dictated — install, model download, and transcription all work. So the
+missing-`.so` launch crash and the ABI-mismatch segfault are genuinely gone on-device, not just in the
+CI `ldd` gate. Shipped it: merged PR #2, bumped 2.0.1 → **2.0.2**, tagged, and the release pipeline built
+all three OSes green (the Linux clean-machine gate passing again on the tag build). **Published v2.0.2 as
+the public Latest** — Windows proven, Linux hardware-verified, macOS kept as a labelled untested preview
+(no Mac tester yet). This is the first release where Linux is a real, working target rather than a
+documented preview.
+
+**New issue surfaced by the same test: accuracy — transcription drops/misses words** for that friend.
+Important framing: this is *not* a regression from the Linux fix and *not* Linux-specific — it's the
+speech models + audio pipeline, shared by all platforms. Reviewed the capture path (`commands.rs`: cpal
+`default_input_config` → f32 stream → mono downmix → per-chunk `resample_linear` to 16 kHz; a drain loop
+`mem::take`s the shared buffer every 250 ms while the callback `try_lock()`s it). Concrete candidates,
+none yet confirmed: (1) **model/mic** — "English Mini" or a quiet/distant mic simply drops words; (2)
+**live-chunk boundaries** — chunks are transcribed independently, so a split near speech can clip a word;
+(3) the callback **drops audio on lock contention** (small window, real smell); (4) an **f32-only
+`build_input_stream`** that would fail outright on i16-default ALSA devices. Deliberately did **not**
+rewrite the proven audio path on a hypothesis — the next step is the friend's model + a said-vs-shown
+example + `aurascribe.log`, which distinguishes "mishears" (model) from "drops chunks" (audio) in one
+look. Recorded so the audio path isn't blindly churned.
+
 ### 2026-08-27 (later) — Linux `.deb` finally carries its libraries (missing-`.so` + segfault, one cause)
 
 A tester gave the v2.0.0 Linux `.deb` its first real run on hardware and it failed twice: launch died with
