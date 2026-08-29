@@ -253,6 +253,13 @@ pub fn capture_selection() -> Option<String> {
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    // Triggered from a global hotkey (e.g. Ctrl/Cmd+Shift+O), so Shift/Alt are likely still held —
+    // a raw Ctrl+C would arrive as Ctrl+Shift+C and not copy. Release the stray modifiers first, let
+    // the target settle, then send a clean copy. (Releasing an up key is a harmless no-op.)
+    let _ = enigo.key(Key::Shift, Direction::Release);
+    let _ = enigo.key(Key::Alt, Direction::Release);
+    std::thread::sleep(std::time::Duration::from_millis(40));
+
     enigo.key(modifier, Direction::Press).ok()?;
     enigo.key(Key::Unicode('c'), Direction::Click).ok()?;
     enigo.key(modifier, Direction::Release).ok()?;
@@ -318,11 +325,19 @@ fn send_ctrl_v() -> Result<(), String> {
 }
 
 /// Send Ctrl+C, to copy the current selection to the clipboard. Mirrors `send_ctrl_v`.
+///
+/// This is invoked from a **global hotkey** (e.g. Ctrl+Shift+O), so at the instant it runs the user
+/// is still physically holding those modifiers. A naive Ctrl+C would therefore reach the target as
+/// Ctrl+**Shift**+C (or Ctrl+Alt+C), which does NOT copy — the clipboard stays empty and the feature
+/// reports "nothing selected". So we first synthesize key-UP for every modifier that could be held,
+/// let the target process that, and only then send a clean Ctrl+C. Releasing an already-up key is a
+/// harmless no-op, so this is also correct when triggered without any modifier held.
 #[cfg(target_os = "windows")]
 fn send_ctrl_c() -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
-        VK_CONTROL, VK_C,
+        VK_C, VK_CONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RMENU, VK_RSHIFT, VK_RWIN,
+        VK_SHIFT,
     };
 
     let key = |vk: VIRTUAL_KEY, up: bool| -> INPUT {
@@ -339,14 +354,37 @@ fn send_ctrl_c() -> Result<(), String> {
             },
         }
     };
-    let inputs = [
+
+    // Phase 1: release any modifier the triggering hotkey left held (Shift/Alt/Win, and Ctrl too so
+    // we re-assert it cleanly below). Do NOT release the C-key equivalent 'O' — it is a letter, not a
+    // modifier, and clears on its own.
+    let release_modifiers = [
+        key(VK_SHIFT, true),
+        key(VK_LSHIFT, true),
+        key(VK_RSHIFT, true),
+        key(VK_MENU, true),
+        key(VK_LMENU, true),
+        key(VK_RMENU, true),
+        key(VK_LWIN, true),
+        key(VK_RWIN, true),
+        key(VK_CONTROL, true),
+    ];
+    let sent = unsafe { SendInput(&release_modifiers, std::mem::size_of::<INPUT>() as i32) };
+    if sent != release_modifiers.len() as u32 {
+        return Err("Could not clear held modifiers before copy".into());
+    }
+    // Let the target window process the key-ups before the copy, so Shift is truly up first.
+    std::thread::sleep(std::time::Duration::from_millis(40));
+
+    // Phase 2: a clean Ctrl+C.
+    let copy = [
         key(VK_CONTROL, false),
         key(VK_C, false),
         key(VK_C, true),
         key(VK_CONTROL, true),
     ];
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
+    let sent = unsafe { SendInput(&copy, std::mem::size_of::<INPUT>() as i32) };
+    if sent != copy.len() as u32 {
         return Err("Could not send Ctrl+C".into());
     }
     Ok(())
