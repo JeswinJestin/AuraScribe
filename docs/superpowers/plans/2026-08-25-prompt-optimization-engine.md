@@ -91,8 +91,21 @@
 - [x] **Step 1:** Added `llama-cpp-2 = { version = "=0.1.150", optional = true }` + `encoding_rs` (streaming UTF-8 decode of tokens); `prompt = ["dep:llama-cpp-2", "dep:encoding_rs"]`.
 - [x] **Step 2:** Implemented the `llm` submodule in `optimize.rs` (behind `#[cfg(feature = "prompt")]`): cached backend (`OnceLock<LlamaBackend>`) + cached model (`Mutex<Option<Arc<LlamaModel>>>`), `find_gguf()` locates the optimizer `.gguf` in the models dir (prefers 1.5B, then 0.5B, then any), and `generate()` does tokenize → batch → decode → **greedy** sample loop → `token_to_piece` until `is_eog_token`. `clean_output()` strips stray chat markers / wrapping quotes (compiled + tested on every build). Written against the **verified 0.1.150 API** (docs.rs signatures), NOT from memory — but it is **not compile-verified** (llama.cpp builds from source + needs the crate fetched; unavailable in the sandbox). Default build + 6 optimize tests stay green.
 - [ ] **Step 3 (OWNER — first build + judge):** `.\moonshine-build.bat` with `--features "moonshine prompt"`, place a Qwen2.5-**0.5B** Q4 GGUF (the lightweight default; try 1.5B too if you want to compare) in `%LOCALAPPDATA%\AuraScribe\models`, run the app, select text, press the hotkey, and **judge the rewrite quality** (context preserved? reads well? latency acceptable? is 0.5B good enough, or is 1.5B worth the extra ~0.6 GB?).
-  - **⚠️ #1 build risk — ggml symbol collision.** whisper-rs (always compiled) and `llama-cpp-2` **both statically link ggml**, so `--features "moonshine prompt"` may hit duplicate-symbol / ODR link errors. If so, options in order of preference: (a) check whether a `llama-cpp-2` feature can reuse a shared/system ggml; (b) build the optimizer in a **separate helper binary/process** that links only llama.cpp and talks to the app over stdio (cleanest isolation, also sandboxes a model crash); (c) as a stopgap, build `--features prompt` WITHOUT `moonshine` to prove the optimizer alone first. Capture the exact linker error before choosing.
-  - **If the `llm` module itself won't compile:** it's ~60 lines written to `llama-cpp-2` 0.1.150; check the installed version's docs.rs and adjust (most likely spots: `LlamaSampler::greedy()`/`.sample()`/`.accept()`, `token_to_piece` args, `with_n_gpu_layers`). The behavior around it (system prompt, ChatML, cleanup) is stable + tested.
+  - **✅ BUILD VERIFIED (2026-08-29, CI run 33231075757, `--features moonshine,prompt`, Windows).** The
+    feared ggml symbol collision **did not occur** — whisper.cpp + llama.cpp + sherpa all link into one
+    installer (the sidecar-process fallback is NOT needed). Two *unrelated* issues surfaced and are fixed:
+    (1) **`onnxruntime.dll doesn't exist`** at Tauri's resource check — the sherpa DLLs sit under
+    `target/release/deps` until link time, and the longer llama build exposed the ordering; `test-build.yml`
+    now compiles deps first and copies the DLLs to `target/release` before bundling. (2) **`no field
+    use_mmap on llama_model_params`** — `llama-cpp-2 0.1.150` declares `llama-cpp-sys-2 ^0.1.150` and Cargo
+    pulled the newer `0.1.154` whose bindings dropped that field; **pinned `llama-cpp-sys-2 = "=0.1.150"`**
+    (Cargo.toml + lock) so the wrapper and bindings match. Installer built + downloadable
+    (`aurascribe-windows-prompt-exe`, ~10 MB). **`moonshine-build.bat` for a local build should pass the
+    same `--features moonshine,prompt`; the DLL-ordering copy may be needed locally too if it recurs.**
+  - **If the `llm` module ever needs API tweaks on a version bump:** it's ~60 lines written to `llama-cpp-2`
+    0.1.150 (+ `-sys` 0.1.150); keep the two in lockstep and check docs.rs (likely spots:
+    `LlamaSampler::greedy()`/`.sample()`/`.accept()`, `token_to_piece` args, `with_n_gpu_layers`). The
+    behavior around it (system prompt, ChatML, cleanup) is stable + tested.
 - [ ] **Step 4:** Iterate on the system prompt / sampling based on real output; commit once quality is acceptable.
 
 ### Task 6 (OWNER): model download UI + end-to-end
