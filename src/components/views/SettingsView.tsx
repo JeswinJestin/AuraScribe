@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Download, Loader2, Check, Trash2, Globe, AlertTriangle } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { ModelInfo, Settings, Status, StorageReport } from '@/lib/ipc'
+import type { ModelInfo, Settings, Status, StorageReport, OptimizeModelStatus } from '@/lib/ipc'
 import { modelDisplay, EUROPEAN_LANGS } from '@/lib/models'
 import { PageHeader, Section, ErrorNote, Toggle, Select } from '@/components/ui'
 
@@ -230,6 +230,83 @@ function StorageSection({ onChanged }: { onChanged?: () => void }) {
         )}
       </div>
     </Section>
+  )
+}
+
+/** The optimizer-model status + one-click download, shown inside Settings → Prompt optimization.
+ *  Replaces the old "coming soon" note so users can install the model from the UI. */
+function OptimizeModelRow() {
+  const [status, setStatus] = useState<OptimizeModelStatus | null>(null)
+  const [downloading, setDownloading] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [err, setErr] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await ipc.optimizeModelStatus())
+    } catch (e) {
+      setErr(String(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const un = ipc.onOptimizeModelDownloadProgress((p) => setProgress(p))
+    return () => {
+      un.then((f) => f())
+    }
+  }, [refresh])
+
+  const download = async () => {
+    setDownloading(true)
+    setErr(null)
+    setProgress(0)
+    try {
+      await ipc.downloadOptimizeModel()
+      await refresh()
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  if (status?.installed) {
+    return (
+      <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        <Check className="h-4 w-4 text-[hsl(var(--primary))]" />
+        <span>Optimizer model installed{status.name ? ` (${status.name})` : ''}.</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {err && <ErrorNote>{err}</ErrorNote>}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] text-muted-foreground">
+          The optimizer needs a small local model (Qwen2.5-0.5B, ~{status?.size_mb ?? 491} MB, one-time).
+          Nothing runs until it&rsquo;s installed.
+        </p>
+        <button onClick={download} disabled={downloading} className="btn-primary btn-sm shrink-0">
+          {downloading ? (
+            <span className="mono">{Math.round(progress * 100)}%</span>
+          ) : (
+            <span className="inline-flex items-center gap-1">
+              <Download className="h-4 w-4" /> Download model
+            </span>
+          )}
+        </button>
+      </div>
+      {downloading && (
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[hsl(var(--muted))]">
+          <div
+            className="h-full bg-[hsl(var(--primary))] transition-[width] duration-200"
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -593,10 +670,7 @@ export function SettingsView({
               />
             </label>
           )}
-          <p className="text-[11px] text-muted-foreground">
-            The optimizer model is a separate one-time download (coming soon). Until it is installed,
-            the shortcut reports that the model is not available.
-          </p>
+          <OptimizeModelRow />
         </div>
       </Section>
 

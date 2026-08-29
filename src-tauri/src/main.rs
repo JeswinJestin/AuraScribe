@@ -331,6 +331,8 @@ fn main() {
             commands::optimize_selection,
             commands::get_storage_report,
             commands::reclaim_storage,
+            commands::optimize_model_status,
+            commands::download_optimize_model,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

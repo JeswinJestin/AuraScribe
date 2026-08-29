@@ -866,6 +866,105 @@ pub async fn reclaim_storage(state: tauri::State<'_, AppState>) -> Result<u64, S
     Ok(freed)
 }
 
+// ---- Prompt-optimizer model (Qwen2.5-0.5B GGUF) ----
+
+/// The lightweight default optimizer model — Qwen2.5-0.5B-Instruct, Q4_K_M GGUF (~491 MB, Apache-2.0).
+const OPTIMIZE_MODEL_URL: &str =
+    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const OPTIMIZE_MODEL_FILE: &str = "qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const OPTIMIZE_MODEL_SIZE_MB: u64 = 491;
+
+#[derive(Debug, Serialize)]
+pub struct OptimizeModelStatus {
+    /// Whether an optimizer `.gguf` is present in the models dir.
+    pub installed: bool,
+    /// The installed model's filename, if any.
+    pub name: Option<String>,
+    /// Download size of the default model, for the UI.
+    pub size_mb: u64,
+}
+
+/// Report whether the prompt-optimizer model is installed. The optimizer uses any `.gguf` in the
+/// models dir (Whisper uses `.bin`, sherpa uses `.onnx`), so any `.gguf` counts as installed.
+#[command]
+pub async fn optimize_model_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<OptimizeModelStatus, String> {
+    let dir = state.asr.models_dir().to_path_buf();
+    let name = std::fs::read_dir(&dir).ok().and_then(|rd| {
+        rd.flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n.to_ascii_lowercase().ends_with(".gguf"))
+    });
+    Ok(OptimizeModelStatus {
+        installed: name.is_some(),
+        name,
+        size_mb: OPTIMIZE_MODEL_SIZE_MB,
+    })
+}
+
+/// Download the default optimizer model into the models dir, emitting progress on
+/// `optimize-model-download-progress` (0.0–1.0). Mirrors the ASR `download_model` streaming pattern:
+/// write to a `.part` sibling, then rename on completion so a half-download is never picked up. This
+/// is the only network request the optimizer makes (the CLAUDE.md model-download exception).
+#[command]
+pub async fn download_optimize_model(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dir = state.asr.models_dir().to_path_buf();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(OPTIMIZE_MODEL_FILE);
+    if path.exists() {
+        app.emit("optimize-model-download-progress", 1.0f32).ok();
+        return Ok(());
+    }
+    let tmp = path.with_extension("gguf.part");
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(OPTIMIZE_MODEL_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to start optimizer-model download: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Optimizer-model download rejected by server: {e}"))?;
+    let total = response.content_length().unwrap_or(0);
+
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
+        .map_err(|e| format!("Failed to create model file: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut last_reported = -1.0f32;
+
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download error: {e}"))?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            .await
+            .map_err(|e| format!("Write error: {e}"))?;
+        downloaded += chunk.len() as u64;
+        let progress = if total > 0 { downloaded as f32 / total as f32 } else { 0.0 };
+        // Throttle IPC: only emit on a visible move (same as the ASR download path).
+        if progress - last_reported >= 0.005 || progress >= 1.0 {
+            last_reported = progress;
+            app.emit("optimize-model-download-progress", progress).ok();
+        }
+    }
+
+    tokio::io::AsyncWriteExt::flush(&mut file)
+        .await
+        .map_err(|e| format!("Failed to flush file: {e}"))?;
+    drop(file);
+    tokio::fs::rename(&tmp, &path)
+        .await
+        .map_err(|e| format!("Failed to finalize model file: {e}"))?;
+    app.emit("optimize-model-download-progress", 1.0f32).ok();
+    tracing::info!("Optimizer model downloaded: {}", path.display());
+    Ok(())
+}
+
 // ---- Dictionary ----
 
 #[derive(Debug, Deserialize)]

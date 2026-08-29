@@ -337,6 +337,26 @@ export async function onModelDownloadProgress(
   return listen<{ modelId: string; progress: number }>('model-download-progress', (e) => callback(e.payload))
 }
 
+// Prompt-optimizer model (Qwen2.5-0.5B GGUF)
+export interface OptimizeModelStatus {
+  installed: boolean
+  name: string | null
+  size_mb: number
+}
+
+export async function optimizeModelStatus(): Promise<OptimizeModelStatus> {
+  return invoke('optimize_model_status')
+}
+
+export async function downloadOptimizeModel(): Promise<void> {
+  return invoke('download_optimize_model')
+}
+
+/** Progress (0..1) of the optimizer-model download. */
+export async function onOptimizeModelDownloadProgress(callback: (progress: number) => void) {
+  return listen<number>('optimize-model-download-progress', (e) => callback(e.payload))
+}
+
 // Emit to Rust
 export async function emitToRust(event: string, payload: unknown) {
   return emit(event, payload)
