@@ -113,7 +113,7 @@
 **Files:**
 - Modify: `src-tauri/src/commands.rs` (`optimize_model_status` / `download_optimize_model` reusing the model-download infra), `SettingsView.tsx` (download button + progress)
 
-- [ ] Wire the download to the existing model-download code; show progress; the feature no-ops with a "download the model" hint until present. Owner tests the full flow.
+- [x] Wire the download to the existing model-download code; show progress; the feature no-ops with a "download the model" hint until present. **DONE (2026-08-29):** `optimize_model_status` / `download_optimize_model` commands (reqwest streaming → `.part` → rename, `optimize-model-download-progress` events, mirrors the ASR `download_model`), and a `OptimizeModelRow` in Settings → Prompt optimization (status + Download button + progress bar) replacing the old "coming soon" note. Fetches Qwen2.5-0.5B Q4 (~491 MB). **Also fixed a critical adjacent bug:** Storage → Reclaim classified the optimizer `.gguf` as an orphan and DELETED it (owner lost the model; log `Reclaimed 491400032 bytes`) — `storage.rs` now treats any `.gguf` as a Model (regression test added). Owner still verifies the interactive download + optimize flow.
 
 ---
 
