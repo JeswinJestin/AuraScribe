@@ -80,11 +80,22 @@ pub fn entry_size(path: &Path) -> u64 {
 fn classify(name: &str, known: &HashSet<String>) -> EntryKind {
     if name.ends_with(PARTIAL_SUFFIX) {
         EntryKind::Partial
-    } else if known.contains(name) {
+    } else if known.contains(name) || is_optimizer_model(name) {
         EntryKind::Model
     } else {
         EntryKind::Orphan
     }
+}
+
+/// The prompt-optimizer model is a `.gguf` file whose name is not in the ASR catalogue (that lists
+/// only the speech engines). It is still a real, user-installed model — treat any `.gguf` as a Model
+/// so "Reclaim" never deletes it. (Regression guard: a manual/auto reclaim once wiped a 469 MB
+/// optimizer GGUF because it was misclassified as an orphan.)
+fn is_optimizer_model(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("gguf"))
+        .unwrap_or(false)
 }
 
 /// Scan `models_dir`, classifying and measuring every top-level entry. `known` is the set of on-disk
@@ -286,6 +297,28 @@ mod tests {
         assert!(!dir.path().join("ggml-large-v3.bin").exists());
         assert!(!dir.path().join("ggml-turbo.bin.part").exists());
         assert!(!dir.path().join("leftover-experiment").exists());
+    }
+
+    #[test]
+    fn optimizer_gguf_is_a_model_and_is_never_reclaimed() {
+        // Regression: a .gguf (the prompt-optimizer model) is not in the ASR catalogue, so it used to
+        // be classified as an orphan and DELETED by Reclaim — wiping a 469 MB model the user placed.
+        let dir = TmpDir::new();
+        let gguf = dir.path().join("qwen2.5-0.5b-instruct-q4_k_m.gguf");
+        fs::write(&gguf, vec![0u8; 700]).unwrap();
+        fs::write(dir.path().join("ggml-old.bin"), vec![0u8; 200]).unwrap(); // an actual orphan
+
+        let known = known_set(&[]); // catalogue does NOT list the gguf
+        let entries = scan_models_dir(dir.path(), &known);
+        let kind = |n: &str| entries.iter().find(|e| e.name == n).unwrap().kind;
+        assert_eq!(kind("qwen2.5-0.5b-instruct-q4_k_m.gguf"), EntryKind::Model, "a .gguf must be a Model");
+        assert_eq!(kind("ggml-old.bin"), EntryKind::Orphan);
+
+        // Reclaim frees only the real orphan; the optimizer model survives.
+        let freed = reclaim(dir.path(), &known);
+        assert_eq!(freed, 200);
+        assert!(gguf.exists(), "the optimizer .gguf must NOT be reclaimed");
+        assert!(!dir.path().join("ggml-old.bin").exists());
     }
 
     #[test]
