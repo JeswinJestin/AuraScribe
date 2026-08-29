@@ -12,27 +12,51 @@
 /// The optimizer's instructions. Intent-adaptive (structured prompt / cleanup / both, inferred from
 /// the text) with a hard rule to preserve the original context. Kept as one const so it is
 /// unit-testable and reviewable independently of any model.
-pub const SYSTEM_PROMPT: &str = "You are a prompt-optimization assistant that runs entirely on the user's own device. \
-You are given a piece of text the user dictated or selected. Rewrite it into the best possible form for talking to an \
-AI assistant, without losing any of the original meaning or details.\n\n\
-First infer, from the text itself, what the user wants:\n\
-- If they ask (explicitly or implicitly) for a well-structured prompt, produce one with clear sections: Role, Context, \
-Task, and the desired Output format (add Constraints only if the text implies them).\n\
-- If they only want the text cleaned up or clarified, produce a single clear, specific, well-phrased request with no \
-rigid template.\n\
-- If it is a mix, do both: clean it up and structure it.\n\n\
+pub const SYSTEM_PROMPT: &str = "You are an expert prompt engineer. You take a user's rough, spoken, or half-formed \
+request and turn it into a single high-quality prompt they can paste into an AI assistant to get an excellent result. \
+Write the prompt they SHOULD have asked — clearer, more specific, and better organized than the original — while staying \
+true to what they actually want.\n\n\
+Think first about the user's real goal and the situation behind their words, then write a well-structured prompt using \
+the parts below. Include only the parts that fit the request; never output an empty or placeholder section.\n\
+- Role: the expertise or persona the AI should adopt.\n\
+- Context: the relevant background and the user's underlying goal, inferred from the request.\n\
+- Task: the specific thing to do, stated concretely and unambiguously.\n\
+- Requirements: constraints, must-haves, and edge cases the user stated or clearly implied.\n\
+- Output format: exactly how the answer should be delivered (structure, length, language, style).\n\n\
 Rules you must always follow:\n\
-- Never lose or contradict the original context. Do not invent facts the user did not give, and do not drop details \
-they did.\n\
-- Preserve every concrete instruction, name, number, and constraint from the original text.\n\
+- Preserve every concrete detail, name, number, and constraint the user gave, and never contradict them.\n\
+- Make vague requests specific: add the sensible, commonly-expected details a good prompt needs, but do not invent facts \
+that conflict with what the user said.\n\
+- Remove filler, self-corrections, repetition, and meta-commentary (e.g. \"this is a test\", \"um\", \"or something\", \
+\"I'll paste this below\"). Keep only the real request.\n\
+- Be concrete and directive. Prefer specific instructions over vague ones.\n\
 - Match the user's language.\n\
-- Output ONLY the rewritten result. No preamble, no commentary, no surrounding quotes.";
+- Output ONLY the finished prompt. No preamble, no explanation of your changes, no surrounding quotes, no markdown code \
+fences.";
+
+/// The active system prompt. To allow **live tuning without a rebuild**, an `optimize_prompt.txt`
+/// placed in the app data dir (`%LOCALAPPDATA%/AuraScribe/optimize_prompt.txt`) overrides the
+/// built-in default when present and non-empty. This is how the engine is refined against real
+/// output without recompiling the app.
+pub fn system_prompt() -> std::borrow::Cow<'static, str> {
+    if let Some(dir) = dirs::data_local_dir() {
+        let path = dir.join("AuraScribe").join("optimize_prompt.txt");
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return std::borrow::Cow::Owned(trimmed.to_string());
+            }
+        }
+    }
+    std::borrow::Cow::Borrowed(SYSTEM_PROMPT)
+}
 
 /// Wrap `user_text` in the model's chat template (Qwen2.5 / ChatML) with the system prompt, ready to
 /// feed to the model. Returns the full prompt string ending at the assistant turn.
 pub fn build_prompt(user_text: &str) -> String {
     format!(
-        "<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n",
+        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n",
+        system = system_prompt(),
         user = user_text.trim(),
     )
 }
@@ -120,17 +144,10 @@ mod llm {
             .join("models")
     }
 
-    fn name_has(path: &std::path::Path, needle: &str) -> bool {
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.to_ascii_lowercase().contains(needle))
-            .unwrap_or(false)
-    }
-
     /// Locate the optimizer GGUF in the models directory. It is the only `.gguf` we use (Whisper uses
-    /// `.bin`, the sherpa engines use `.onnx`), so any `.gguf` there is the optimizer. If both the
-    /// 1.5B and 0.5B are present, prefer the 1.5B (the user opted into the heavier, higher-quality
-    /// one); otherwise the 0.5B default; otherwise the first `.gguf` found.
+    /// `.bin`, the sherpa engines use `.onnx`), so any `.gguf` there is the optimizer. Prefer the
+    /// **largest** one: a bigger model gives better prompt-engineering quality, so if the user has
+    /// added a heavier model (1.5B/3B) next to the default 0.5B, use the heavier one.
     fn find_gguf() -> Option<PathBuf> {
         let mut ggufs: Vec<PathBuf> = std::fs::read_dir(models_dir())
             .ok()?
@@ -142,13 +159,8 @@ mod llm {
                     .unwrap_or(false)
             })
             .collect();
-        ggufs.sort();
-        ggufs
-            .iter()
-            .find(|p| name_has(p, "1.5b"))
-            .cloned()
-            .or_else(|| ggufs.iter().find(|p| name_has(p, "0.5b")).cloned())
-            .or_else(|| ggufs.into_iter().next())
+        ggufs.sort_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0));
+        ggufs.pop() // largest
     }
 
     /// Initialize (once) and return the process-wide llama.cpp backend.
@@ -252,9 +264,11 @@ mod tests {
     #[test]
     fn system_prompt_carries_the_core_rules() {
         let low = SYSTEM_PROMPT.to_lowercase();
-        assert!(low.contains("never lose"), "must forbid losing context");
+        assert!(low.contains("preserve"), "must preserve the user's details");
+        assert!(low.contains("do not invent"), "must forbid inventing conflicting facts");
         assert!(low.contains("output only"), "must demand result-only output");
         assert!(low.contains("structured") || low.contains("structure"), "must offer structuring");
+        assert!(low.contains("prompt engineer"), "must frame the model as a prompt engineer");
     }
 
     #[test]
