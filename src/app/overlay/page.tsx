@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Mic, Loader2, Square } from 'lucide-react'
+import { Mic, Loader2, Square, Sparkles } from 'lucide-react'
 import { overlayReady, stopRecording, getStatus } from '@/lib/ipc'
 import { listen } from '@tauri-apps/api/event'
 
@@ -11,10 +11,15 @@ import { listen } from '@tauri-apps/api/event'
 interface Status {
   is_recording: boolean
   is_processing: boolean
+  is_optimizing?: boolean
 }
 
 export default function OverlayPage() {
-  const [status, setStatus] = useState<Status>({ is_recording: false, is_processing: false })
+  const [status, setStatus] = useState<Status>({
+    is_recording: false,
+    is_processing: false,
+    is_optimizing: false,
+  })
   const [hover, setHover] = useState(false)
   const [stopping, setStopping] = useState(false)
 
@@ -50,7 +55,12 @@ export default function OverlayPage() {
     const refresh = () => {
       getStatus()
         .then((s) => {
-          if (!cancelled) setStatus({ is_recording: s.is_recording, is_processing: s.is_processing })
+          if (!cancelled)
+            setStatus({
+              is_recording: s.is_recording,
+              is_processing: s.is_processing,
+              is_optimizing: s.is_optimizing,
+            })
         })
         .catch(() => {})
     }
@@ -69,7 +79,7 @@ export default function OverlayPage() {
     if (!listening) setStopping(false)
   }, [listening])
 
-  if (!listening && !status.is_processing) {
+  if (!listening && !status.is_processing && !status.is_optimizing) {
     return null
   }
 
@@ -88,7 +98,9 @@ export default function OverlayPage() {
       ? hover
         ? 'Stop'
         : 'Listening…'
-      : 'Processing…'
+      : status.is_optimizing
+        ? 'Optimizing…'
+        : 'Processing…'
 
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-transparent">
@@ -107,10 +119,12 @@ export default function OverlayPage() {
       >
         <span
           className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full transition-colors ${
-            listening ? 'bg-red-500' : 'bg-yellow-500'
+            listening ? 'bg-red-500' : status.is_optimizing ? 'bg-violet-500' : 'bg-yellow-500'
           }`}
         >
-          {stopping || status.is_processing ? (
+          {status.is_optimizing ? (
+            <Sparkles className="h-3.5 w-3.5 animate-pulse text-white" />
+          ) : stopping || status.is_processing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
           ) : hover && canStop ? (
             <Square className="h-3 w-3 fill-white text-white" />

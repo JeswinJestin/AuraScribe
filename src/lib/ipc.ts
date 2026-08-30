@@ -30,6 +30,8 @@ export interface Settings {
 export interface Status {
   is_recording: boolean
   is_processing: boolean
+  /** True while the prompt optimizer is rewriting a selection (drives the "Optimizing…" overlay). */
+  is_optimizing?: boolean
   is_model_loaded: boolean
   /** The model actually in memory. Authoritative — trust over the saved setting. */
   loaded_model: string | null

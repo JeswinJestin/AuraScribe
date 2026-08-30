@@ -54,7 +54,7 @@ pub fn register_optimize(app: &AppHandle, combo: &str) -> Result<(), String> {
         if event.state() == ShortcutState::Pressed {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = crate::commands::optimize_selection().await {
+                if let Err(e) = crate::commands::optimize_selection(app.clone()).await {
                     tracing::warn!("Prompt-optimize hotkey failed: {}", e);
                     // Surface the reason (nothing selected / model missing) via the status error.
                     let state = app.state::<AppState>();

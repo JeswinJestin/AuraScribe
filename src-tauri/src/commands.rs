@@ -3,7 +3,7 @@ use crate::cleanup::{self, CleanupOptions};
 use crate::db::Database;
 use crate::injection::TextInjector;
 use serde::{Deserialize, Serialize};
-use tauri::{command, AppHandle, Emitter};
+use tauri::{command, AppHandle, Emitter, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -97,6 +97,10 @@ impl Default for Settings {
 pub struct Status {
     pub is_recording: bool,
     pub is_processing: bool,
+    /// True while the prompt optimizer is rewriting a selection. Drives the overlay's "Optimizing…"
+    /// indicator so the user sees that work is happening (the local LLM takes a few seconds).
+    #[serde(default)]
+    pub is_optimizing: bool,
     pub is_model_loaded: bool,
     /// Which model is actually in memory right now. The frontend must trust this rather
     /// than the saved setting — the two diverge whenever a load fails or is in flight.
@@ -112,6 +116,7 @@ impl Default for Status {
         Self {
             is_recording: false,
             is_processing: false,
+            is_optimizing: false,
             is_model_loaded: false,
             loaded_model: None,
             current_text: String::new(),
@@ -126,7 +131,7 @@ pub async fn emit_status(app: &AppHandle, status: &Status) {
     app.emit("status-changed", status.clone()).ok();
     crate::tray::update_icon(app, status);
 
-    if status.is_recording || status.is_processing {
+    if status.is_recording || status.is_processing || status.is_optimizing {
         crate::overlay::show(app);
     } else {
         crate::overlay::hide(app);
@@ -1351,17 +1356,38 @@ pub async fn get_log_file_path() -> Result<String, String> {
 /// acts on whatever window has focus when it runs. Errors (nothing selected, model unavailable) are
 /// returned for the UI to surface.
 #[command]
-pub async fn optimize_selection() -> Result<(), String> {
-    // Capture and inject are CPU/keyboard work; keep them off the async runtime.
+pub async fn optimize_selection(app: AppHandle) -> Result<(), String> {
+    // Capture is keyboard/clipboard work; keep it off the async runtime.
     let selection = tokio::task::spawn_blocking(crate::injection::capture_selection)
         .await
         .map_err(|e| e.to_string())?;
     let Some(text) = selection else {
         return Err("Select some text first, then press the shortcut".into());
     };
-    let optimized = tokio::task::spawn_blocking(move || crate::optimize::optimize_text(&text))
+
+    // Show the "Optimizing…" overlay while the local LLM runs — it takes a few seconds, and without a
+    // visible indicator the user can't tell anything is happening. Always cleared afterwards.
+    let state = app.state::<AppState>();
+    async fn set_optimizing(app: &AppHandle, state: &tauri::State<'_, AppState>, on: bool) {
+        {
+            let mut s = state.status.lock().await;
+            s.is_optimizing = on;
+            if on {
+                s.last_error = None;
+            }
+        }
+        let status = { state.status.lock().await.clone() };
+        emit_status(app, &status).await;
+    }
+
+    set_optimizing(&app, &state, true).await;
+    let result = tokio::task::spawn_blocking(move || crate::optimize::optimize_text(&text))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    set_optimizing(&app, &state, false).await;
+
+    let optimized = result?;
     crate::injection::TextInjector::new().inject_text(&optimized)?;
     Ok(())
 }
