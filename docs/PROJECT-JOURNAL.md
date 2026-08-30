@@ -516,3 +516,35 @@ as "verify by running" reaches from CI; the last mile — a model actually loadi
 new version and running the `.deb` on Debian/Ubuntu. Left the lowercase `/usr/bin/aurascribe` binary name
 alone: the package-name-vs-binary-name mismatch the tester noted is ordinary Debian convention, and
 renaming would fight both the rpath and the proven Windows exe name.
+
+### 2026-08-30 — prompt optimizer goes real: from crash → clean rewrites, on the owner's own machine
+
+The optimizer (Tasks 5–6) went from "builds in CI" to actually working on the owner's Windows box, through
+a chain of on-device bugs that CI could never have caught — the recurring lesson that a global-hotkey +
+local-LLM + clipboard feature is only truly testable by a human pressing the key. In order:
+
+1. **It did nothing / "select some text".** The log showed the hotkey firing but the copy capturing nothing.
+   Root cause: the Ctrl+Shift+O global hotkey fires while Shift is still physically held, so the app's
+   synthetic Ctrl+C arrived as Ctrl+**Shift**+C and never copied. Fixed by key-UP-ing Shift/Alt/Win/Ctrl,
+   settling 40 ms, then a clean Ctrl+C (`injection.rs`, both the Win SendInput and enigo paths).
+2. **The model wasn't there.** The owner believed they'd downloaded the GGUF; a filesystem check proved it
+   was nowhere on disk. Because we run on the owner's machine, we just fetched it into the models dir.
+   (Also fixed a self-inflicted wound: Storage → Reclaim had classified the `.gguf` as an orphan and deleted
+   it — any `.gguf` is now protected.)
+3. **"I don't see the download option."** The owner was on a pre-Task-6 build; the Settings model-download
+   UI (`OptimizeModelRow`) was already committed. Clarified that the `.exe` IS the update, and that with the
+   model present the row correctly shows "installed ✓" instead of a button.
+4. **Quality was weak.** 0.5B is too small to be a real prompt engineer. Two fixes: rewrote the system prompt
+   into a proper framework (Role/Context/Task/Requirements/Output; strips filler + meta-commentary), and made
+   it **live-tunable from `optimize_prompt.txt`** so future prompt refinement needs no rebuild. `find_gguf()`
+   now picks the **largest** model, and we downloaded 0.5B/1.5B/**3B** so the owner runs the 3B by default.
+   Result: clean, structured rewrites — the owner confirmed it works.
+5. **"Is it even doing anything?"** The ~8–10 s CPU generation had no feedback. Added an `is_optimizing`
+   status that drives the existing overlay pill — a violet "Optimizing…" indicator with a pulsing Sparkles
+   icon — so the wait reads as "working," not "broken." (Animating the selected text itself in another app
+   is impossible; the overlay is the feasible equivalent.)
+
+**Speed reality, recorded honestly:** on CPU the quality/speed knob is model size (3B ~8–10 s, 1.5B ~4–5 s,
+0.5B ~2 s); the only order-of-magnitude win is GPU offload, which needs a CUDA/Vulkan llama build. Open
+follow-ups: a Settings model picker, and optional GPU. The whole thing lives on branch
+`feat/prompt-optimizer-and-overlay-fix` / PR #3, still to be merged after the owner is happy with the feel.
