@@ -178,13 +178,13 @@ export default function App() {
     }
   }, [tourOpen])
 
-  if (!ready) return <div className="h-screen w-screen bg-background" />
+  if (!ready) return <div className="h-full w-full bg-background" />
 
   return (
     // Full-bleed in every appearance — the app fills the frameless window edge to edge.
     // "Glass" is not a smaller box: it is the same full size, but the shell and its cards
     // become frosted glass over a bluish backdrop (see `.glass-bg` in globals.css).
-    <div className="h-screen w-screen overflow-hidden">
+    <div className="h-full w-full overflow-hidden">
       {tourOpen && (
         <SpotlightTour
           hotkey={settings.hotkey}
