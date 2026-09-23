@@ -1,6 +1,6 @@
 {
   "name": "aurascribe",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Free, open-source voice dictation with AI cleanup - Your voice, everywhere.",
   "private": true,
   "scripts": {
