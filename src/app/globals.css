@@ -81,14 +81,27 @@
   * {
     border-color: hsl(var(--border));
   }
-  html,
-  body {
+  html {
     height: 100%;
+    /* No document-level scroll: the app owns its own scrolling regions. */
+    overflow: hidden;
   }
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans), system-ui, sans-serif;
     font-feature-settings: 'cv05' 1, 'ss01' 1;
+    /*
+      Pin the app to the viewport so its content can never pan or rubber-band *within* the
+      frameless window — the "it slides around and feels cheap" report. `position: fixed` + inset
+      removes the whole-document scroll surface (webkit/GTK will otherwise let a 1px overflow drag
+      the entire page), and using inset/100% rather than 100vw avoids the scrollbar-width overflow
+      that made the layout sit a few px off on some setups. Cross-platform (Win/macOS/Linux).
+    */
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
     overscroll-behavior: none;
   }
   /*

@@ -516,3 +516,51 @@ as "verify by running" reaches from CI; the last mile — a model actually loadi
 new version and running the `.deb` on Debian/Ubuntu. Left the lowercase `/usr/bin/aurascribe` binary name
 alone: the package-name-vs-binary-name mismatch the tester noted is ordinary Debian convention, and
 renaming would fight both the rpath and the proven Windows exe name.
+
+### 2026-09-21 — Window pins to the frame; audio stops dropping samples (Windows drag + Linux "half the words")
+
+Two owner reports, one session. **Report A (Windows, with screenshots):** the frameless window's content
+"'slides around inside the frame and feels cheap"' — you could drag and the sidebar would slide off the
+left while the right rail slid off the right. Same class of complaint on Linux as "the width isn't kept /
+the layout breaks." **Report B (Linux):** dictation transcribed **only about half the words** — works on
+the owner's Windows, not on a friend's Linux, same physical machine, different OS.
+
+**Report A root cause — the document had a scroll surface.** The frameless webview let the whole page
+scroll/rubber-band by a hair (`100vw` on the root reserves scrollbar width and overflowed a few px; nothing
+pinned the document). WebKitGTK/WebView2 turn that into a draggable pan of *all* content — precisely the
+screenshots. Fix: `html { overflow:hidden }` + `body { position:fixed; inset:0; width:100
+### 2026-09-21 — Window pins to the frame; audio stops dropping samples (Windows drag + Linux "half the words")
+
+Two owner reports, one session. **Report A (Windows, with screenshots):** the frameless window's content
+"slides around inside the frame and feels cheap" — you could drag and the sidebar would slide off the
+left while the right rail slid off the right. Same class of complaint on Linux as "the width isn't kept /
+the layout breaks." **Report B (Linux):** dictation transcribed **only about half the words** — works on
+the owner's Windows, not on a friend's Linux, same physical machine, different OS.
+
+**Report A root cause — the document had a scroll surface.** The frameless webview let the whole page
+scroll/rubber-band by a hair (`100vw` on the root reserves scrollbar width and overflowed a few px; nothing
+pinned the document). WebKitGTK/WebView2 turn that into a draggable pan of *all* content — precisely the
+screenshots. Fix: `html { overflow:hidden }` + `body { position:fixed; inset:0; width:100%; height:100%;
+overflow:hidden }`, and the two root React containers moved from `w-screen/h-screen` to `w-full/h-full`.
+One root-cause fix covers both the Windows drag and the Linux layout-break reports. **Verified in the live
+preview** (Chromium == Windows WebView2; standard CSS so WebKitGTK matches): no document overflow at the
+design size or the 860x560 minimum, sidebar fully on-screen at min width, nothing clipped.
+
+**Report B — two real, platform-plausible audio bugs, neither reproducible from Windows.** (1) The cpal
+capture callback hard-coded `move |data: &[f32]|`. Linux/ALSA & PipeWire mics frequently default to an
+**integer** format (i16/u16); on those the f32 stream fails to build and the app captures *nothing*. Now
+`build_capture_stream::<T>` dispatches on `config.sample_format()` and converts via `f32::from_sample`
+(same fix for `check_microphone_permission`, which otherwise false-reports "mic blocked" on i16). (2) The
+bigger "half the words" smell: the realtime callback could only `try_lock()` the shared buffer and
+**silently discarded the whole callback's samples** when the async drainer held the lock. On PipeWire
+(bigger callback buffers, more drainer contention) that plausibly loses ~half the speech. Now the callback
+accumulates into a per-stream `local` buffer and flushes on the next successful lock — contention only
+*defers* audio, never drops it. The proven drain path is untouched.
+
+**Honesty line (the project's founding rule):** `cargo check` clean, `cargo test` 88/88, tsc clean, layout
+proven in-browser — but **the transcription-accuracy win is NOT verified.** These are the right suspects
+(the HANDOFF 2026-08-28 investigation named the try_lock-drop and the f32 assumption as candidates), and
+they are genuine defects regardless of platform, but only the friend's on-device `.deb` + `aurascribe.log`
+with a said-vs-shown example proves the fix. Did not rewrite the proven audio path on a guess; made the
+minimal change that removes the data loss. Nothing committed/pushed (owner's "working across devices
+first" rule).

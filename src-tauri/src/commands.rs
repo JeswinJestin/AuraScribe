@@ -377,6 +377,73 @@ async fn transcribe_chunk(
     emit_status(app, &st).await;
 }
 
+/// Down-mix one callback's worth of samples to mono f32 and append to `local`.
+///
+/// Generic over the device's native sample format (`f32` / `i16` / `u16`): many Linux/ALSA and
+/// PipeWire input devices report an **integer** default format, on which the old `&[f32]`-only
+/// callback would either fail to build the stream or be skipped — a real "it barely hears me"
+/// cause off Windows. `f32::from_sample` converts each sample into the [-1, 1] range regardless.
+fn append_mono_f32<T>(local: &mut Vec<f32>, data: &[T], channels: usize)
+where
+    T: cpal::Sample,
+    f32: cpal::FromSample<T>,
+{
+    use cpal::Sample;
+    if channels > 1 {
+        for frame in data.chunks(channels) {
+            let sum: f32 = frame.iter().map(|s| f32::from_sample(*s)).sum();
+            local.push(sum / channels as f32);
+        }
+    } else {
+        local.extend(data.iter().map(|s| f32::from_sample(*s)));
+    }
+}
+
+/// Build a capture stream that **never drops audio on lock contention**.
+///
+/// The cpal callback runs on a realtime thread and can only `try_lock` the shared buffer; the old
+/// code discarded the whole callback's samples whenever the drainer held the lock. On machines
+/// where the capture thread and the async drainer contend more (notably Linux/PipeWire, whose
+/// callback buffers are larger, so each dropped callback loses *more* speech) that surfaced as
+/// **"only half my words were transcribed."** Here a per-stream `local` accumulator keeps any
+/// samples that arrive while the lock is busy and flushes them on the next successful lock, so a
+/// moment of contention only *defers* audio — nothing is ever thrown away.
+fn build_capture_stream<T>(
+    device: &cpal::Device,
+    stream_config: &cpal::StreamConfig,
+    buffer: std::sync::Arc<tokio::sync::Mutex<Vec<f32>>>,
+    channels: usize,
+    // Incremented once per callback that found the buffer lock busy and deferred its samples to
+    // the next callback. Logged when the stream stops, so `aurascribe.log` shows whether the
+    // no-drop path actually saved audio (the on-device signal for the "half the words" fix).
+    deferred: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    use cpal::traits::DeviceTrait;
+    use std::sync::atomic::Ordering;
+    let mut local: Vec<f32> = Vec::new();
+    device.build_input_stream(
+        stream_config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            append_mono_f32(&mut local, data, channels);
+            if let Ok(mut buf) = buffer.try_lock() {
+                // `append` moves everything out of `local`, leaving it empty for reuse.
+                buf.append(&mut local);
+            } else {
+                // Lock busy: keep the samples in `local`, flush next callback (no data loss).
+                deferred.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+        |err| {
+            tracing::warn!("Audio stream error: {}", err);
+        },
+        None,
+    )
+}
+
 #[command]
 pub async fn start_recording(
     state: tauri::State<'_, AppState>,
@@ -458,6 +525,10 @@ pub async fn start_recording(
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
+        // The device's native sample format. Not always f32 — integer formats are common on
+        // Linux/ALSA — so the stream is built for the real format and converted (see
+        // `build_capture_stream`), instead of assuming f32 and silently capturing nothing.
+        let sample_format = config.sample_format();
 
         tauri::async_runtime::block_on(async {
             *sample_rate_clone.lock().await = sample_rate;
@@ -465,28 +536,37 @@ pub async fn start_recording(
 
         let stream_config: cpal::StreamConfig = config.into();
 
-        let stream = device
-            .build_input_stream(
-                &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer_clone.try_lock() {
-                        if channels > 1 {
-                            for chunk in data.chunks(channels) {
-                                let mono: f32 = chunk.iter().sum::<f32>() / channels as f32;
-                                buf.push(mono);
-                            }
-                        } else {
-                            buf.extend_from_slice(data);
-                        }
-                    }
-                },
-                |err| {
-                    tracing::warn!("Audio stream error: {}", err);
-                },
-                None,
-            )
-            .map_err(|e| e.to_string())
-            .ok();
+        // Names the real capture format up front, so a Linux/PipeWire "it barely hears me" report
+        // can be read straight from the log (an integer format here is exactly what the old
+        // f32-only path could not build).
+        tracing::info!(
+            "Audio capture starting: format={:?}, {}Hz, {}ch",
+            sample_format, sample_rate, channels
+        );
+
+        let deferred = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let deferred_clone = deferred.clone();
+
+        let stream = match sample_format {
+            cpal::SampleFormat::F32 => {
+                build_capture_stream::<f32>(&device, &stream_config, buffer_clone, channels, deferred_clone)
+            }
+            cpal::SampleFormat::I16 => {
+                build_capture_stream::<i16>(&device, &stream_config, buffer_clone, channels, deferred_clone)
+            }
+            cpal::SampleFormat::U16 => {
+                build_capture_stream::<u16>(&device, &stream_config, buffer_clone, channels, deferred_clone)
+            }
+            other => {
+                tracing::warn!("Unsupported input sample format: {:?}", other);
+                return;
+            }
+        }
+        .map_err(|e| {
+            tracing::warn!("Failed to build input stream: {}", e);
+            e.to_string()
+        })
+        .ok();
 
         if let Some(stream) = stream {
             stream.play().ok();
@@ -500,7 +580,12 @@ pub async fn start_recording(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
-            tracing::info!("Audio capture stopped ({}Hz, {}ch)", sample_rate, channels);
+            tracing::info!(
+                "Audio capture stopped ({}Hz, {}ch, {} deferred flushes — samples saved by the no-drop path)",
+                sample_rate,
+                channels,
+                deferred.load(std::sync::atomic::Ordering::Relaxed)
+            );
         }
     });
 
@@ -1185,14 +1270,33 @@ pub async fn check_microphone_permission() -> Result<bool, String> {
             Ok(c) => c,
             Err(_) => return false,
         };
+        // Probe the stream in the device's real sample format. Building an f32 stream on an
+        // integer-format device fails, which used to read as "microphone blocked" on Linux even
+        // when the mic was fine. A tiny no-op callback per format keeps this a pure permission probe.
+        let sample_format = config.sample_format();
         let stream_config: cpal::StreamConfig = config.into();
 
-        let result = device.build_input_stream(
-            &stream_config,
-            move |_data: &[f32], _: &cpal::InputCallbackInfo| {},
-            |_err| {},
-            None,
-        );
+        let result = match sample_format {
+            cpal::SampleFormat::F32 => device.build_input_stream(
+                &stream_config,
+                move |_data: &[f32], _: &cpal::InputCallbackInfo| {},
+                |_err| {},
+                None,
+            ),
+            cpal::SampleFormat::I16 => device.build_input_stream(
+                &stream_config,
+                move |_data: &[i16], _: &cpal::InputCallbackInfo| {},
+                |_err| {},
+                None,
+            ),
+            cpal::SampleFormat::U16 => device.build_input_stream(
+                &stream_config,
+                move |_data: &[u16], _: &cpal::InputCallbackInfo| {},
+                |_err| {},
+                None,
+            ),
+            _ => return false,
+        };
 
         match result {
             Ok(stream) => stream.play().is_ok(),
