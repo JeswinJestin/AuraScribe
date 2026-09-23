@@ -413,12 +413,17 @@ fn build_capture_stream<T>(
     stream_config: &cpal::StreamConfig,
     buffer: std::sync::Arc<tokio::sync::Mutex<Vec<f32>>>,
     channels: usize,
+    // Incremented once per callback that found the buffer lock busy and deferred its samples to
+    // the next callback. Logged when the stream stops, so `aurascribe.log` shows whether the
+    // no-drop path actually saved audio (the on-device signal for the "half the words" fix).
+    deferred: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
     use cpal::traits::DeviceTrait;
+    use std::sync::atomic::Ordering;
     let mut local: Vec<f32> = Vec::new();
     device.build_input_stream(
         stream_config,
@@ -427,8 +432,10 @@ where
             if let Ok(mut buf) = buffer.try_lock() {
                 // `append` moves everything out of `local`, leaving it empty for reuse.
                 buf.append(&mut local);
+            } else {
+                // Lock busy: keep the samples in `local`, flush next callback (no data loss).
+                deferred.fetch_add(1, Ordering::Relaxed);
             }
-            // Lock busy: keep the samples in `local` and flush them next callback (no data loss).
         },
         |err| {
             tracing::warn!("Audio stream error: {}", err);
@@ -529,15 +536,26 @@ pub async fn start_recording(
 
         let stream_config: cpal::StreamConfig = config.into();
 
+        // Names the real capture format up front, so a Linux/PipeWire "it barely hears me" report
+        // can be read straight from the log (an integer format here is exactly what the old
+        // f32-only path could not build).
+        tracing::info!(
+            "Audio capture starting: format={:?}, {}Hz, {}ch",
+            sample_format, sample_rate, channels
+        );
+
+        let deferred = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let deferred_clone = deferred.clone();
+
         let stream = match sample_format {
             cpal::SampleFormat::F32 => {
-                build_capture_stream::<f32>(&device, &stream_config, buffer_clone, channels)
+                build_capture_stream::<f32>(&device, &stream_config, buffer_clone, channels, deferred_clone)
             }
             cpal::SampleFormat::I16 => {
-                build_capture_stream::<i16>(&device, &stream_config, buffer_clone, channels)
+                build_capture_stream::<i16>(&device, &stream_config, buffer_clone, channels, deferred_clone)
             }
             cpal::SampleFormat::U16 => {
-                build_capture_stream::<u16>(&device, &stream_config, buffer_clone, channels)
+                build_capture_stream::<u16>(&device, &stream_config, buffer_clone, channels, deferred_clone)
             }
             other => {
                 tracing::warn!("Unsupported input sample format: {:?}", other);
@@ -562,7 +580,12 @@ pub async fn start_recording(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
-            tracing::info!("Audio capture stopped ({}Hz, {}ch)", sample_rate, channels);
+            tracing::info!(
+                "Audio capture stopped ({}Hz, {}ch, {} deferred flushes — samples saved by the no-drop path)",
+                sample_rate,
+                channels,
+                deferred.load(std::sync::atomic::Ordering::Relaxed)
+            );
         }
     });
 
