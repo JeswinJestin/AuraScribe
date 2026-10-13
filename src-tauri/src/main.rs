@@ -12,6 +12,7 @@ mod engine;
 mod expand;
 mod hotkey;
 mod injection;
+mod meeting;
 #[cfg(feature = "moonshine")]
 mod moonshine;
 #[cfg(feature = "moonshine")]
@@ -230,6 +231,7 @@ fn main() {
                 target_window: Arc::new(Mutex::new(0)),
                 chunk_state: Arc::new(Mutex::new(Default::default())),
                 chunk_task: Arc::new(Mutex::new(None)),
+                meeting: crate::meeting::MeetingState::default(),
             };
             app.manage(state);
 
@@ -331,6 +333,13 @@ fn main() {
             commands::optimize_selection,
             commands::get_storage_report,
             commands::reclaim_storage,
+            meeting::start_meeting,
+            meeting::stop_meeting,
+            meeting::meeting_status,
+            meeting::list_meetings,
+            meeting::get_meeting,
+            meeting::rename_meeting,
+            meeting::delete_meeting,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

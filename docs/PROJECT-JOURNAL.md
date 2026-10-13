@@ -564,3 +564,41 @@ they are genuine defects regardless of platform, but only the friend's on-device
 with a said-vs-shown example proves the fix. Did not rewrite the proven audio path on a guess; made the
 minimal change that removes the data loss. Nothing committed/pushed (owner's "working across devices
 first" rule).
+
+### 2026-10-13 — Notepad injection fixed (paste-first on Windows); Notetaker MVP begun (Phase 1)
+
+Two things, from a user's bug report plus an owner-approved scope expansion. Full design:
+`docs/superpowers/specs/2026-10-13-notetaker-design.md`.
+
+**The Notepad bug — root-caused and permanently fixed.** A user (Ryan) reported that on Win 11 his
+dictations landed as runs of `......` and `?????` — but only in **Windows Notepad**; his own follow-up
+found Notepad++ and the browser worked. That A/B was the whole diagnosis: short dictations (≤120 chars)
+took the per-character `SendInput`/`KEYEVENTF_UNICODE` **typing** path, and the rewritten Windows 11
+Notepad (WinAppSDK/RichEdit) has a known buffering defect with rapid injected Unicode keystrokes —
+they arrive garbled unless a real input event flushes the queue. Scintilla (Notepad++) and Chromium
+drain it fine. Fix: **Windows now pastes every dictation** (the clipboard path the code already trusted
+as incorruptible for long text); typing is demoted to the fallback for paste-hostile windows. Low risk
+— it extends an already-proven path and the clipboard-restore race was already handled. **Honest
+limit:** interactive injection can't be verified headless, so the final proof is the owner dictating
+into the new Notepad. Grounded the diagnosis with a web search (AutoHotkey "SendInput halted in Win 11
+Notepad"; microsoft/terminal #12977) rather than guessing.
+
+**Notetaker — the scope-creep question, handled deliberately.** The ask was "a notetaker like Wispr
+Flow, including meetings I join on headphones." This is the PRD's **#1 named v1 non-goal**, so it got a
+real pushback first: Wispr's value is **cloud STT + cloud LLM summaries**, both of which break
+AuraScribe's non-negotiables (no cloud ever; ~4.6 MB lightweight — a local summarizer is multi-GB). The
+owner chose to build the **part that stays true to the product**: capture **system loopback (what you
+hear) + mic**, transcribe **locally**, store a **transcript** — **no AI summary, no cloud, no account**.
+That boundary is written into the spec so it can't quietly drift back toward "Wispr, but breaking our
+own rules."
+
+**Phase 1 shipped (isolated from the dictation hot path):** migration `011_meetings.sql` + DB methods;
+`meeting.rs` doing **WASAPI loopback via the `windows` crate we already depend on** (added
+`Win32_Media_Audio`/`Win32_Media_KernelStreaming` features — deliberately **no new crate**) + mic mix
+through the existing ASR pipeline; 7 Tauri commands; a Notetaker sidebar view + `/preview` tab.
+**92/92 cargo tests, tsc clean, UI verified in the browser preview** (list + transcript detail). **What
+is NOT proven:** the loopback/mic capture + transcription at runtime — COM audio the sandbox can't
+exercise; the owner's first real call + `aurascribe.log` (which logs the detected loopback format/rate)
+is the verification, same honesty bar as the macOS/Linux audio paths. Phase 2 = that on-device run +
+repair + live indicator; Phase 3 = long-form accuracy (a dedicated meeting model), export/search, and
+an **optional** local summary only via the already-opt-in `prompt` LLM. Nothing committed/pushed.

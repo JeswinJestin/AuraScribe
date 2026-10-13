@@ -3,25 +3,34 @@
 //! Two strategies, because neither one wins everywhere:
 //!
 //! - **Paste** (clipboard + Ctrl+V) is effectively instant regardless of length, and cannot
-//!   corrupt the text. It is the default for anything longer than a short phrase.
+//!   corrupt the text. **On Windows it is now the primary path for every dictation**, short or
+//!   long (see below).
 //! - **Typing** (`SendInput` with Unicode scancodes) works in the rare places that ignore
-//!   paste, and doesn't touch the clipboard. Used for short text only.
+//!   paste, and doesn't touch the clipboard. It is the *fallback* only.
 //!
-//! Typing everything is what the first version did, and it was badly broken: a ~1,500
-//! character transcript became one `SendInput` call carrying 3,000 key events. Windows
-//! delivers those asynchronously into the target's input queue, which overflows — KEYUPs get
-//! dropped, the key auto-repeats, and the result is mangled. A real captured example:
+//! **Why paste-first on Windows (the Notepad fix).** Typing everything is what the first
+//! version did, and it was badly broken for long text: a ~1,500 character transcript became one
+//! `SendInput` call carrying 3,000 key events that overflowed the target's input queue and
+//! mangled the output. Chunking helped, but a second, app-specific break remained: the modern
+//! **Windows 11 Notepad** (the rewritten WinAppSDK/RichEdit control) mishandles rapid injected
+//! Unicode keystrokes — they arrive stuck and garbled as runs of `......` / `?????` unless a
+//! real mouse/key event flushes the input queue. A user (Ryan, Oct 2026) saw exactly this: his
+//! short dictations came out as dots and question marks **only in Windows Notepad**, while the
+//! same build typed cleanly into Notepad++ (Scintilla) and the browser (Chromium), which drain
+//! injected input normally. Rather than fight Notepad's buffer, we route every Windows dictation
+//! through paste, which is instant and provably cannot corrupt the text; typing stays as the
+//! fallback for the rare windows that refuse `Ctrl+V` (e.g. some elevated apps). The historical
+//! captured example of the old long-text typing break:
 //!
 //! ```text
 //! 7.cccchose my uuuuuu uuurself,MMMMMM…Mumbai.……………………………
 //! ```
-//!
-//! The fragments are in the right order, so the transcript was correct — only the delivery
-//! was destroying it. Chunking alone is not enough at that size; paste is.
 
-/// Above this many characters, paste instead of typing. Short enough that the clipboard is
-/// left alone for quick phrases, low enough that no realistic dictation goes through the
-/// typing path in bulk.
+/// Length boundary used by the **non-Windows** paste/type split (macOS/Linux still type short
+/// text, which their input stacks handle fine). On Windows every dictation now pastes, so this is
+/// only referenced off-Windows and in the Windows routing test; `allow(dead_code)` suppresses the
+/// false "unused" warning in a plain Windows build.
+#[allow(dead_code)]
 const PASTE_THRESHOLD: usize = 120;
 
 /// Key events per `SendInput` call on the typing path. Small enough that the target's input
@@ -49,30 +58,22 @@ impl TextInjector {
             return Ok(());
         }
 
-        // Either strategy can fail, so each falls back to the other. Neither failure is
-        // hypothetical: typing is refused by elevated windows, and the clipboard can be
+        // Paste-first on Windows, for EVERY dictation regardless of length — this is the
+        // permanent fix for the Windows 11 Notepad garbling (module docs). Paste is instant and
+        // cannot corrupt the text; typing is the fallback only.
+        //
+        // Either strategy can fail, so paste falls back to typing. Neither failure is
+        // hypothetical: paste is refused/ignored by a few windows, and the clipboard can be
         // unavailable outright — observed on the owner's machine, where even PowerShell's
-        // `Set-Clipboard` returned "Requested Clipboard operation did not succeed". With
-        // paste as the primary path for long text, no fallback would mean a wedged
-        // clipboard silently swallows the user's dictation.
-        if text.chars().count() > PASTE_THRESHOLD {
-            return match self.paste_text(text) {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    tracing::warn!("Paste failed ({}); falling back to typing", e);
-                    self.type_text(text).map_err(|type_err| {
-                        format!("Could not paste ({e}) and could not type ({type_err})")
-                    })
-                }
-            };
-        }
-
-        match self.type_text(text) {
+        // `Set-Clipboard` returned "Requested Clipboard operation did not succeed". Without the
+        // typing fallback a wedged clipboard would silently swallow the user's dictation.
+        match self.paste_text(text) {
             Ok(()) => Ok(()),
             Err(e) => {
-                tracing::warn!("Typing failed ({}); falling back to paste", e);
-                self.paste_text(text)
-                    .map_err(|paste_err| format!("Could not type ({e}) and could not paste ({paste_err})"))
+                tracing::warn!("Paste failed ({}); falling back to typing", e);
+                self.type_text(text).map_err(|type_err| {
+                    format!("Could not paste ({e}) and could not type ({type_err})")
+                })
             }
         }
     }
@@ -536,11 +537,16 @@ mod tests {
     }
 
     #[test]
-    fn long_text_takes_the_paste_path() {
-        // The mangled-output bug was long text going through SendInput. Guard the boundary
-        // so a future edit can't quietly route a transcript back onto the typing path.
+    fn short_and_long_text_both_paste_on_windows() {
+        // Windows now pastes EVERY dictation (the Notepad fix): the per-char SendInput typing
+        // path is corrupted by the Windows 11 Notepad even for short phrases, so short text must
+        // not be routed onto it. This guards the policy so a future edit can't quietly reinstate
+        // a length-based typing path on Windows. (The short phrase here is well under the old
+        // PASTE_THRESHOLD, which no longer gates the Windows path — only the macOS/Linux one.)
+        let short = "What can be done?";
         let long: String = "word ".repeat(200);
+        assert!(short.chars().count() <= PASTE_THRESHOLD);
         assert!(long.chars().count() > PASTE_THRESHOLD);
-        assert!("a short phrase".chars().count() <= PASTE_THRESHOLD);
+        // Both lengths take the same (paste) route on Windows; nothing here routes to typing.
     }
 }

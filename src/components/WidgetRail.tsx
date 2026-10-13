@@ -203,6 +203,28 @@ export function WidgetRail({
         </Widget>
       </>
     ),
+    notetaker: (
+      <>
+        <Widget title="What it captures">
+          <Body>
+            Records the call audio you hear plus your mic, and transcribes it on-device. Windows
+            only for now.
+          </Body>
+        </Widget>
+        <Widget title="Local, like everything else" accent>
+          <Body>
+            Nothing is uploaded and there is no AI summary — just a transcript that stays on this
+            machine.
+          </Body>
+        </Widget>
+        <Widget title="Accuracy">
+          <Body>
+            Long, multi-speaker meetings are harder than short dictation; expect more mistakes than
+            when you dictate alone.
+          </Body>
+        </Widget>
+      </>
+    ),
     history: (
       <>
         <Widget title="Your data">

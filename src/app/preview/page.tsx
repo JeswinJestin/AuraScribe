@@ -19,6 +19,7 @@ import { SpotlightTour } from '@/components/SpotlightTour'
 import { InsightsView } from '@/components/views/InsightsView'
 import { RecapView } from '@/components/views/RecapView'
 import { HistoryView } from '@/components/views/HistoryView'
+import { NotetakerView } from '@/components/views/NotetakerView'
 import { recapYear } from '@/components/views/RecapView'
 import { SettingsView } from '@/components/views/SettingsView'
 import type { Settings, Status } from '@/lib/ipc'
@@ -62,8 +63,25 @@ const MOCK_TRANSCRIPTS = [
   },
 ]
 
+const NOW = Math.floor(Date.now() / 1000)
+const MOCK_MEETINGS = [
+  { id: 2, title: 'Design sync', started_at: NOW - 3600, ended_at: NOW - 1800, duration_ms: 1_800_000, word_count: 1240, source: 'system+mic' },
+  { id: 1, title: 'Standup', started_at: NOW - 90000, ended_at: NOW - 89100, duration_ms: 900_000, word_count: 320, source: 'system+mic' },
+]
+
 const MOCK: Record<string, unknown> = {
   get_transcripts: MOCK_TRANSCRIPTS,
+  list_meetings: MOCK_MEETINGS,
+  meeting_status: { recording: false, meeting_id: null, elapsed_ms: 0 },
+  get_meeting: {
+    meeting: MOCK_MEETINGS[0],
+    segments: [
+      { id: 1, meeting_id: 2, offset_ms: 0, text: 'Okay, let us kick off the design sync. First item is the Notetaker layout.', created_at: NOW },
+      { id: 2, meeting_id: 2, offset_ms: 12_000, text: 'I think the transcript should read top to bottom with timestamps on the left.', created_at: NOW },
+      { id: 3, meeting_id: 2, offset_ms: 31_000, text: 'Agreed. And we keep it local — no cloud summary in this version.', created_at: NOW },
+    ],
+  },
+  delete_meeting: null,
   transcript_daily_counts: [
     { day: new Date().toISOString().slice(0, 10), count: 5 },
     { day: new Date(Date.now() - 86400000).toISOString().slice(0, 10), count: 3 },
@@ -201,7 +219,7 @@ if (typeof window !== 'undefined') {
   }
 }
 
-type Mode = 'history' | 'insights' | 'recap' | 'onboarding' | 'settings'
+type Mode = 'history' | 'notetaker' | 'insights' | 'recap' | 'onboarding' | 'settings'
 
 export default function PreviewPage() {
   const [mode, setMode] = useState<Mode>('history')
@@ -216,6 +234,7 @@ export default function PreviewPage() {
 
   const tabs: { id: Mode; label: string }[] = [
     { id: 'history', label: 'History · Search & Delete' },
+    { id: 'notetaker', label: 'Notetaker' },
     { id: 'insights', label: 'Insights · Streak Share' },
     { id: 'recap', label: `Recap · ${YEAR}` },
     { id: 'onboarding', label: 'Onboarding' },
@@ -248,6 +267,12 @@ export default function PreviewPage() {
       {mode === 'history' && (
         <div className="mx-auto max-w-3xl px-8 py-10">
           <HistoryView />
+        </div>
+      )}
+
+      {mode === 'notetaker' && (
+        <div className="mx-auto max-w-3xl px-8 py-10">
+          <NotetakerView />
         </div>
       )}
 

@@ -79,6 +79,11 @@ windows = { version = "0.58", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
+    # WASAPI loopback capture for the Notetaker (records system output = the meeting you hear in
+    # headphones). Driven through the windows crate we already depend on, rather than adding a
+    # loopback crate — see docs/superpowers/specs/2026-10-13-notetaker-design.md.
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
 ] }
 winreg = "0.52"
 

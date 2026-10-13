@@ -341,3 +341,62 @@ export async function onModelDownloadProgress(
 export async function emitToRust(event: string, payload: unknown) {
   return emit(event, payload)
 }
+
+// --- Notetaker (local meeting transcription) -------------------------------------------------
+
+export interface Meeting {
+  id: number
+  title: string
+  started_at: number
+  ended_at: number | null
+  duration_ms: number
+  word_count: number
+  source: string
+}
+
+export interface MeetingSegment {
+  id: number
+  meeting_id: number
+  offset_ms: number
+  text: string
+  created_at: number
+}
+
+export interface MeetingStatus {
+  recording: boolean
+  meeting_id: number | null
+  elapsed_ms: number
+}
+
+export interface MeetingDetail {
+  meeting: Meeting
+  segments: MeetingSegment[]
+}
+
+export async function startMeeting(title?: string): Promise<number> {
+  return invoke<number>('start_meeting', { title: title ?? null })
+}
+
+export async function stopMeeting(): Promise<void> {
+  return invoke('stop_meeting')
+}
+
+export async function meetingStatus(): Promise<MeetingStatus> {
+  return invoke<MeetingStatus>('meeting_status')
+}
+
+export async function listMeetings(): Promise<Meeting[]> {
+  return invoke<Meeting[]>('list_meetings')
+}
+
+export async function getMeeting(id: number): Promise<MeetingDetail> {
+  return invoke<MeetingDetail>('get_meeting', { id })
+}
+
+export async function renameMeeting(id: number, title: string): Promise<void> {
+  return invoke('rename_meeting', { id, title })
+}
+
+export async function deleteMeeting(id: number): Promise<void> {
+  return invoke('delete_meeting', { id })
+}

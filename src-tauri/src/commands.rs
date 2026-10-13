@@ -133,7 +133,7 @@ pub async fn emit_status(app: &AppHandle, status: &Status) {
     }
 }
 
-async fn load_settings_from_db(db: &Database) -> Result<Settings, String> {
+pub(crate) async fn load_settings_from_db(db: &Database) -> Result<Settings, String> {
     let row = db.load_settings().await.map_err(|e| e.to_string())?;
     Ok(Settings {
         hotkey: row.hotkey,
