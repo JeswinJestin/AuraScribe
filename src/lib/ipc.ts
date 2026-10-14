@@ -25,6 +25,8 @@ export interface Settings {
   prompt_optimize_enabled: boolean
   /** Global shortcut for prompt optimization (distinct from the dictation hotkey). */
   prompt_optimize_hotkey: string
+  /** When true, dictation also fuzzy-corrects near-miss mishears of your dictionary terms. Default false. */
+  fuzzy_dictionary: boolean
 }
 
 export interface Status {

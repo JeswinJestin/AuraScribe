@@ -78,7 +78,8 @@ impl Database {
                 ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
                 theme = $8, start_at_login = $9, sound_cues = $10, onboarded = $11,
                 hotkey_enabled = $12, noise_suppression = $13,
-                prompt_optimize_enabled = $14, prompt_optimize_hotkey = $15
+                prompt_optimize_enabled = $14, prompt_optimize_hotkey = $15,
+                fuzzy_dictionary = $16
             WHERE id = 1",
         )
         .bind(&s.hotkey)
@@ -96,6 +97,7 @@ impl Database {
         .bind(s.noise_suppression)
         .bind(s.prompt_optimize_enabled)
         .bind(&s.prompt_optimize_hotkey)
+        .bind(s.fuzzy_dictionary)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -705,6 +707,7 @@ pub struct SettingsRow {
     pub noise_suppression: i32,
     pub prompt_optimize_enabled: i32,
     pub prompt_optimize_hotkey: String,
+    pub fuzzy_dictionary: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]

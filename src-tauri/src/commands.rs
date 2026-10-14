@@ -33,6 +33,10 @@ pub struct Settings {
     pub prompt_optimize_enabled: bool,
     /// The global shortcut for prompt optimization (distinct from the dictation hotkey).
     pub prompt_optimize_hotkey: String,
+    /// When true, dictation/meetings also fuzzy-correct **near-miss** mishears toward the user's own
+    /// dictionary terms (e.g. "kuberneties" → "Kubernetes"), not just exact matches. Default false —
+    /// opt-in, since fuzzy matching can in principle rewrite an unrelated close word. See expand.rs.
+    pub fuzzy_dictionary: bool,
 }
 
 /// Platform-appropriate default global shortcut. Always a modifier + a non-alphabet key (a bare
@@ -89,6 +93,7 @@ impl Default for Settings {
             noise_suppression: false,
             prompt_optimize_enabled: false,
             prompt_optimize_hotkey: default_optimize_hotkey(),
+            fuzzy_dictionary: false,
         }
     }
 }
@@ -155,6 +160,7 @@ pub(crate) async fn load_settings_from_db(db: &Database) -> Result<Settings, Str
         } else {
             row.prompt_optimize_hotkey
         },
+        fuzzy_dictionary: row.fuzzy_dictionary != 0,
     })
 }
 
@@ -205,6 +211,7 @@ pub async fn save_settings(
             noise_suppression: settings.noise_suppression as i32,
             prompt_optimize_enabled: settings.prompt_optimize_enabled as i32,
             prompt_optimize_hotkey: settings.prompt_optimize_hotkey.clone(),
+            fuzzy_dictionary: settings.fuzzy_dictionary as i32,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -741,7 +748,7 @@ pub async fn stop_recording(
         // makes the Words and Snippets screens actually affect dictation — before this they were
         // stored and displayed but never touched the transcript. Runs even when cleanup is off,
         // so corrections and canned phrases work regardless of that toggle.
-        let cleaned = crate::expand::apply(&cleaned, &dictionary, &snippets);
+        let cleaned = crate::expand::apply(&cleaned, &dictionary, &snippets, settings.fuzzy_dictionary);
 
         // Recording silence or background noise leaves nothing but Whisper's non-speech
         // annotations, which cleanup strips. Injecting the empty remainder — or a lone

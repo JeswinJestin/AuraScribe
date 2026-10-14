@@ -121,6 +121,23 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-14 (later) — Accuracy: opt-in fuzzy dictionary correction (item B)
+
+First of the owner's A/B/C/D accuracy/feature asks. **In-recognizer contextual biasing (the original
+"B") is NOT feasible** — `sherpa-rs`'s `MoonshineRecognizer::transcribe` (the default engine) takes
+only audio, no hotword/context list, so true in-model biasing would require forking the ASR path (a
+no-go per CLAUDE.md). Shipped the achievable, local, verifiable form instead: **`expand.rs::fuzzy_correct`**
+— after the exact dictionary pass, optionally fix **near-miss mishears of the user's own Words** (e.g.
+"kuberneties" → "Kubernetes"). Conservative to avoid false positives: whole-word, case-insensitive,
+≥5-char terms only; bounded Levenshtein (≤1 for len 5–7, ≤2 longer); same first letter; length within
+±2; replaces only on a single unambiguous match. **Opt-in** via a new `fuzzy_dictionary` setting
+(migration `012`, default **off**) + a "Fuzzy-correct my Words" toggle in Settings, so default dictation
+is byte-for-byte unchanged. `cargo test 101/101` (6 new fuzzy tests incl. false-positive guards), `tsc`
+clean. **Status of the rest:** A (local Qwen summary) needs the llama.cpp build + model — owner-hardware
+to verify; C (diarization) needs a speaker model + real multi-speaker audio; D (online enrichment) is
+the no-cloud line — an explicit go-decision, built only if the owner says so. Real-world accuracy of the
+fuzzy pass needs the owner's mic to judge (logic is unit-proven). On branch, not merged.
+
 ### 2026-10-14 — Notetaker Phase 2: on-device verified + real-time transcript + local auto-rename
 
 **Capture VERIFIED on the owner's hardware.** `aurascribe.log` from a real run:

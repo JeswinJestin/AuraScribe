@@ -186,6 +186,7 @@ const MOCK_SETTINGS: Settings = {
   noise_suppression: false,
   prompt_optimize_enabled: true,
   prompt_optimize_hotkey: 'Ctrl+Shift+O',
+  fuzzy_dictionary: false,
 }
 
 const MOCK_STATUS: Status = {
