@@ -749,6 +749,25 @@ pub async fn delete_meeting(
     db.delete_meeting(id).await.map_err(|e| e.to_string())
 }
 
+/// Produce a **local extractive summary** of a meeting from its transcript — no model, no cloud.
+/// Computed on demand so it always matches the current transcript. See `summary.rs`.
+#[command]
+pub async fn summarize_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+) -> Result<crate::summary::Summary, String> {
+    let segments = {
+        let db = state.db.lock().await;
+        db.list_meeting_segments(id).await.map_err(|e| e.to_string())?
+    };
+    let transcript = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(crate::summary::summarize(&transcript, 5))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

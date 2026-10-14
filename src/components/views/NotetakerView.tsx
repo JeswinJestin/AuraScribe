@@ -1,9 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Circle, Square, Trash2, FileText } from 'lucide-react'
+import { Circle, Square, Trash2, FileText, Sparkles } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { Meeting, MeetingDetail } from '@/lib/ipc'
+import type { Meeting, MeetingDetail, Summary } from '@/lib/ipc'
 import { PageHeader, EmptyState, ErrorNote } from '@/components/ui'
 
 /** mm:ss from milliseconds (machine-reported value → monospace at the call site). */
@@ -28,6 +28,8 @@ export function NotetakerView() {
   const [elapsedMs, setElapsedMs] = useState(0)
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selected, setSelected] = useState<MeetingDetail | null>(null)
+  const [summary, setSummary] = useState<Summary | null>(null)
+  const [summarizing, setSummarizing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState<{ offset_ms: number; text: string }[]>([])
@@ -116,10 +118,24 @@ export function NotetakerView() {
 
   const open = async (id: number) => {
     setError(null)
+    setSummary(null)
     try {
       setSelected(await ipc.getMeeting(id))
     } catch (e) {
       setError(String(e))
+    }
+  }
+
+  const summarize = async () => {
+    if (!selected) return
+    setError(null)
+    setSummarizing(true)
+    try {
+      setSummary(await ipc.summarizeMeeting(selected.meeting.id))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSummarizing(false)
     }
   }
 
@@ -240,12 +256,59 @@ export function NotetakerView() {
       {/* Transcript of the selected meeting */}
       {selected && (
         <div className="mt-4 rounded-[14px] border bg-card p-[18px]">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium">{selected.meeting.title}</h3>
-            <button onClick={() => setSelected(null)} className="btn-ghost btn-sm">
-              Close
-            </button>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="min-w-0 truncate text-sm font-medium">{selected.meeting.title}</h3>
+            <div className="flex shrink-0 items-center gap-2">
+              {selected.segments.length > 0 && (
+                <button
+                  onClick={summarize}
+                  disabled={summarizing}
+                  className="btn-secondary btn-sm gap-1.5"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  {summarizing ? 'Summarizing…' : 'Summarize'}
+                </button>
+              )}
+              <button onClick={() => setSelected(null)} className="btn-ghost btn-sm">
+                Close
+              </button>
+            </div>
           </div>
+
+          {/* Local extractive summary (no cloud, no model) — shown once generated. */}
+          {summary && (
+            <div className="mb-4 rounded-[12px] border bg-secondary/40 p-4">
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Sparkles className="h-3 w-3" />
+                Summary
+                <span className="font-normal text-muted-foreground/60">· on-device, extractive</span>
+              </div>
+              {summary.key_points.length === 0 ? (
+                <p className="text-[13px] text-muted-foreground">Not enough speech to summarize.</p>
+              ) : (
+                <ul className="flex list-disc flex-col gap-1.5 pl-5">
+                  {summary.key_points.map((p, i) => (
+                    <li key={i} className="text-[13px] leading-relaxed">
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {summary.keywords.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {summary.keywords.map((k) => (
+                    <span
+                      key={k}
+                      className="rounded-full border bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
+                    >
+                      {k}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {selected.segments.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">
               No speech was transcribed for this meeting.

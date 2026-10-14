@@ -121,6 +121,24 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-14 (later) — Notetaker: local summary (item A) + record-button visibility fix
+
+**Record button fix (owner-reported).** The Notetaker Start/Stop button used `btn-ink`, whose light
+background (`hsl(--foreground)`) + white text is near-invisible in the default Glass/dark theme. Now a
+filled `bg-primary` pill with a red record dot (Start) / record-coloured pill (Stop) — the same
+colour-means-state language as the Dictate record button. Works in light and dark.
+
+**Item A — local meeting summary.** A *Qwen/llama.cpp abstractive* summary needs a multi-GB model +
+from-source build (unverifiable from the sandbox) and strains "lightweight", so the shippable,
+charter-fit version is **extractive** (`summary.rs`): it scores the transcript's own sentences by
+significant-word density (Luhn/TF), returns the top ~5 in original order + up to 8 keywords. **No
+model, no cloud, deterministic, can't hallucinate.** New `summarize_meeting` command (computes on
+demand from segments), `summarizeMeeting` IPC, and a **Summary** card in the meeting detail (sparkle
+header "· on-device, extractive", bulleted key points, keyword chips). `cargo test 105/105` (4 new
+summary tests), `tsc` clean, verified in `/preview` (Summarize → card renders). **The richer
+abstractive summary (fluent prose / action items) remains the opt-in LLM upgrade** via the `prompt`
+Qwen path — still unwired (needs the llama.cpp build), still never cloud.
+
 ### 2026-10-14 (later) — Accuracy: opt-in fuzzy dictionary correction (item B)
 
 First of the owner's A/B/C/D accuracy/feature asks. **In-recognizer contextual biasing (the original

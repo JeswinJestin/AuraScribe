@@ -82,6 +82,13 @@ const MOCK: Record<string, unknown> = {
     ],
   },
   delete_meeting: null,
+  summarize_meeting: {
+    key_points: [
+      'The transcript should read top to bottom with timestamps on the left.',
+      'We keep it local — no cloud summary in this version.',
+    ],
+    keywords: ['transcript', 'local', 'layout', 'timestamps'],
+  },
   transcript_daily_counts: [
     { day: new Date().toISOString().slice(0, 10), count: 5 },
     { day: new Date(Date.now() - 86400000).toISOString().slice(0, 10), count: 3 },

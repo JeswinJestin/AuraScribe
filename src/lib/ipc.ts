@@ -403,6 +403,16 @@ export async function deleteMeeting(id: number): Promise<void> {
   return invoke('delete_meeting', { id })
 }
 
+/** A local extractive summary of a meeting (no model, no cloud). */
+export interface Summary {
+  key_points: string[]
+  keywords: string[]
+}
+
+export async function summarizeMeeting(id: number): Promise<Summary> {
+  return invoke<Summary>('summarize_meeting', { id })
+}
+
 /** Fires each time a window is transcribed during capture — for the live transcript. */
 export async function onMeetingSegment(
   callback: (payload: { meeting_id: number; offset_ms: number; text: string }) => void

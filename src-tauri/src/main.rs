@@ -25,6 +25,7 @@ mod optimize;
 mod overlay;
 mod sound;
 mod storage;
+mod summary;
 mod streaks;
 mod system;
 mod tray;
@@ -340,6 +341,7 @@ fn main() {
             meeting::get_meeting,
             meeting::rename_meeting,
             meeting::delete_meeting,
+            meeting::summarize_meeting,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
