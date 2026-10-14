@@ -204,7 +204,20 @@ if (typeof window !== 'undefined') {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any
   w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ ?? {}
+  // Stub the event API too, so components that `listen()` (e.g. the Notetaker live transcript)
+  // don't throw in the harness. Events never actually fire here; that's fine for a visual preview.
+  if (typeof w.__TAURI_INTERNALS__.transformCallback !== 'function') {
+    w.__TAURI_INTERNALS__.transformCallback = (cb: unknown) => {
+      const id = Math.floor(Math.random() * 1e9)
+      w.__TAURI_INTERNALS__.__cbs = w.__TAURI_INTERNALS__.__cbs ?? {}
+      w.__TAURI_INTERNALS__.__cbs[id] = cb
+      return id
+    }
+  }
   w.__TAURI_INTERNALS__.invoke = async (cmd: string, args?: any) => {
+    // Event plugin: pretend to subscribe/unsubscribe so listen()/unlisten() resolve cleanly.
+    if (cmd === 'plugin:event|listen') return Math.floor(Math.random() * 1e9)
+    if (cmd === 'plugin:event|unlisten') return null
     if (cmd === 'search_transcripts') {
       const q = (args?.query ?? '').toLowerCase()
       return MOCK_TRANSCRIPTS.filter(

@@ -602,3 +602,32 @@ exercise; the owner's first real call + `aurascribe.log` (which logs the detecte
 is the verification, same honesty bar as the macOS/Linux audio paths. Phase 2 = that on-device run +
 repair + live indicator; Phase 3 = long-form accuracy (a dedicated meeting model), export/search, and
 an **optional** local summary only via the already-opt-in `prompt` LLM. Nothing committed/pushed.
+
+### 2026-10-14 — Notetaker Phase 2: loopback verified on hardware; real-time transcript; the cloud question
+
+**The unverified part is now verified.** The owner ran a real capture and `aurascribe.log` proved both
+sources work: mic `F32, 48000Hz, 1ch` and **WASAPI system loopback `48000Hz, 2ch, 32bit, float=true`**.
+The blind COM audio code was correct. Test A (paste-first Notepad fix) also confirmed working. This is
+the payoff of the honest "it compiles but needs your hardware" labelling — it held up.
+
+**Phase 2 built:** real-time transcript (the chunker emits a `meeting-segment` event per 6s window; the
+Notetaker view grows a live panel while recording, instead of only after Stop) and local auto-rename
+(`derive_title` from the first sentence — no model, no network). cargo test 95/95, tsc clean, verified
+in /preview.
+
+**The cloud question (recorded, not acted on).** The owner pushed back on the no-cloud non-negotiable:
+a local model's knowledge is frozen, so how do you validate *recent* facts or enrich entities? Good
+question — and the honest answer separates three things: (1) **dictation** basically never needs the
+internet (it's transcribing speech, not answering questions) — accuracy comes from better acoustic
+modelling + context biasing, all local; (2) **meeting summaries** summarise what was *said*, which is
+in the transcript — a local LLM does this fine without current-events knowledge; (3) **fact-checking a
+claim made in a meeting** (the Wispr "homepage says 8,500 vs 11,000" case) is the *only* part that
+genuinely needs live external data. So the proposal is: local by default for 1 and 2; any online call
+for 3 is strictly opt-in, per-feature, clearly labelled, and never ships content without explicit
+consent — which preserves the privacy promise that is the product's entire differentiator vs Wispr
+Flow. The `CLAUDE.md` cautionary tale was about *lying* (AES-256 over a plaintext key), not about
+honest opt-in online features. **Decision deferred to the owner; nothing cloud added.** Also captured a
+menu of local accuracy ideas (contextual biasing/hotwords from the user's Dictionary, app-aware
+vocabulary, Silero VAD endpointing, a punctuation-restoration model, speaker diarization, streaming
+partial results) as the real levers for "more accurate dictation, fewer errors." Nothing committed to
+master; work is on branch `feat/notetaker-mvp-and-notepad-fix`.

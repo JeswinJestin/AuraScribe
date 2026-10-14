@@ -6,7 +6,20 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-10-13 (**Notepad injection fix + Notetaker MVP (Phase 1)** — see the
+**Last updated:** 2026-10-14 (**Notetaker Phase 2 — on-device VERIFIED + real-time transcript** —
+the owner ran a real capture and `aurascribe.log` confirms **both paths work**: mic `format=F32,
+48000Hz, 1ch` and **WASAPI system loopback `48000Hz, 2ch, 32bit, float=true`** — the previously
+unverified COM audio path is proven on hardware, and Test A (Notepad paste-first fix) works perfectly.
+Phase 2 added: (1) **real-time transcript** — the chunker now emits a `meeting-segment` event per
+window (cadence lowered 10s→6s) and the Notetaker view shows a **live transcript panel** that grows
+while recording, instead of only after Stop; (2) **local auto-rename** — `stop_meeting` derives a
+title from the first sentence of the transcript (no model, no cloud) and emits `meeting-finished`.
+`cargo check` clean, **cargo test 95/95** (3 new `derive_title` tests), `tsc` clean, live panel +
+auto-title rendered/verified in `/preview` (added event-API stubs to the harness). **Open product
+decision (owner raised):** the owner is reconsidering the strict no-cloud rule for *recency-dependent*
+features (fact-check/enrichment) and wants a strategy — captured as a decision to make, NOT yet built;
+summaries remain local-only (opt-in Qwen) until decided. Nothing cloud added. **Prior (2026-10-13):**
+**Notepad injection fix + Notetaker MVP (Phase 1)** — see the
 `### 2026-10-13` section below and `docs/superpowers/specs/2026-10-13-notetaker-design.md`. Two
 things landed: (1) **the permanent fix for the Windows 11 Notepad garbling** a user (Ryan) reported
 — his short dictations came out as `......`/`?????` **only in Notepad**, because the modern
@@ -107,6 +120,42 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### 2026-10-14 — Notetaker Phase 2: on-device verified + real-time transcript + local auto-rename
+
+**Capture VERIFIED on the owner's hardware.** `aurascribe.log` from a real run:
+`Meeting mic capture: format=F32, 48000Hz, 1ch` and
+`Meeting loopback capture: 48000Hz, 2ch, 32bit, float=true`. The WASAPI loopback COM path — the one
+piece the sandbox could not exercise — works. Test A (the paste-first Notepad fix) also confirmed
+working by the owner.
+
+**Phase 2 shipped:**
+- **Real-time transcript.** `meeting.rs` chunker now emits a `meeting-segment` Tauri event
+  (`{meeting_id, offset_ms, text}`) each time a window is transcribed, and `CHUNK_SECS` was lowered
+  10→6 for a snappier live feel (fine for Moonshine's short-form model). `NotetakerView.tsx` shows a
+  **Live transcript** panel that appends segments as they arrive while recording, auto-scrolling —
+  the fix for "it only shows after Stop." Events are the fast path; the 1s status poll remains the
+  authoritative fallback.
+- **Local auto-rename.** `stop_meeting` runs `derive_title()` (first sentence / first ~8 words of the
+  transcript, capped — **no model, no network**) when the user never set a title, saves it, and emits
+  `meeting-finished {id, title}` so the list refreshes. 3 unit tests.
+- **Preview harness** gained Tauri event-API stubs (`transformCallback` + `plugin:event|listen`) so
+  event-driven views preview without throwing.
+
+**Verified:** `cargo check` clean, **cargo test 95/95**, `tsc` clean, live panel + recording timer
+rendered in `/preview`. The real-time event flow itself only runs under real Tauri (events) — the
+owner confirms it in the installed app; the backend capture it depends on is already log-verified.
+
+**Open product decision (NOT built):** the owner is questioning the strict no-cloud non-negotiable for
+features that need *current* external data (fact-checking claims made in a meeting, entity enrichment)
+and for stronger summaries, noting a local model's knowledge is frozen/old. This is a genuine
+identity-level decision (local-first privacy is the product's whole differentiator vs Wispr Flow).
+**Recorded as a decision to make, with a proposed principled middle path** (local by default for
+dictation/transcription/summary; any online call strictly opt-in, per-feature, clearly labeled, never
+sending content without explicit consent). Nothing cloud has been added. Summaries stay local-only
+(opt-in Qwen, still unwired) until the owner decides. See the session chat for the full strategy menu
+(accuracy ideas: contextual biasing/hotwords, app-aware vocab, VAD endpointing, punctuation model,
+diarization, streaming partials).
 
 ### 2026-10-13 — Notepad injection fix (paste-first on Windows) + Notetaker MVP Phase 1
 

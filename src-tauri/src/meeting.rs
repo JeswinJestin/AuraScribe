@@ -27,10 +27,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// How often the meeting chunker drains the captured audio and transcribes it. Longer than the
-/// dictation chunk because meeting latency tolerance is higher and longer windows transcribe more
-/// accurately (fewer boundary cuts).
-const CHUNK_SECS: u64 = 10;
+/// How often the meeting chunker drains the captured audio and transcribes it. Short enough that
+/// the live transcript feels real-time (a segment appears every few seconds), long enough that each
+/// window has a usable utterance. Moonshine (the recommended engine) is short-form optimized, so a
+/// few seconds per window costs little accuracy.
+const CHUNK_SECS: u64 = 6;
 
 /// Target rate for ASR (same 16 kHz mono the dictation path feeds Whisper/sherpa).
 const ASR_RATE: u32 = 16_000;
@@ -434,7 +435,7 @@ async fn process_tick(st: &MeetingState, asr: &Arc<crate::engine::Asr>, language
 
 // --- Tauri commands ------------------------------------------------------------------------------
 
-use tauri::{command, AppHandle, State};
+use tauri::{command, AppHandle, Emitter, State};
 
 /// Returned by `meeting_status` so the UI can poll authoritative state (events are the fast path,
 /// not the only path — the CLAUDE.md rule).
@@ -443,6 +444,57 @@ pub struct MeetingStatus {
     pub recording: bool,
     pub meeting_id: Option<i64>,
     pub elapsed_ms: i64,
+}
+
+/// Emitted (`meeting-segment`) each time a window is transcribed during capture, so the UI can grow
+/// the transcript live instead of only after Stop.
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingSegmentEvent {
+    pub meeting_id: i64,
+    pub offset_ms: i64,
+    pub text: String,
+}
+
+/// Emitted (`meeting-finished`) after Stop once the meeting is finalized and (maybe) auto-renamed,
+/// so the UI refreshes its title in the list.
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingFinishedEvent {
+    pub meeting_id: i64,
+    pub title: String,
+}
+
+/// Derive a human title from the first real speech in a meeting, **locally, with no model** — the
+/// first sentence (or first ~8 words), tidied and capped. Returns `None` when there is no usable
+/// text (keeps the default "Untitled meeting"). A smarter, LLM-generated title is a later opt-in.
+pub fn derive_title(segment_texts: &[String]) -> Option<String> {
+    let joined = segment_texts.join(" ");
+    let trimmed = joined.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Prefer the first sentence; fall back to the first chunk of words.
+    let first = trimmed
+        .split(|c| c == '.' || c == '?' || c == '!')
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or(trimmed);
+    let words: Vec<&str> = first.split_whitespace().take(8).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut title = words.join(" ");
+    // Cap length so the list stays tidy; trim trailing punctuation/commas.
+    const MAX: usize = 60;
+    if title.chars().count() > MAX {
+        title = title.chars().take(MAX).collect::<String>().trim_end().to_string();
+        title.push('…');
+    }
+    let title = title.trim_end_matches([',', ';', ':', '-']).trim().to_string();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
 }
 
 /// A meeting plus its transcript segments, for the detail view.
@@ -456,12 +508,12 @@ pub struct MeetingDetail {
 #[command]
 pub async fn start_meeting(
     state: State<'_, crate::app_state::AppState>,
-    _app: AppHandle,
+    app: AppHandle,
     title: Option<String>,
 ) -> Result<i64, String> {
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (&state, &title);
+        let _ = (&state, &title, &app);
         return Err(
             "Meeting capture records system audio (what you hear in the call), which is only \
              supported on Windows right now. It is coming to macOS/Linux later."
@@ -524,10 +576,12 @@ pub async fn start_meeting(
             state.meeting.threads.lock().await.push(h);
         }
 
-        // Chunker: drain + transcribe every CHUNK_SECS, flushing the tail on stop.
+        // Chunker: drain + transcribe every CHUNK_SECS, flushing the tail on stop. Each saved
+        // segment is also emitted so the UI can show the transcript building up live.
         let st = state.meeting.clone();
         let asr = state.asr.clone();
         let db = state.db.clone();
+        let app = app.clone();
         let task = tokio::spawn(async move {
             loop {
                 for _ in 0..(CHUNK_SECS * 10) {
@@ -539,10 +593,18 @@ pub async fn start_meeting(
                 let still = st.recording.load(Ordering::Relaxed);
                 if let Some(text) = process_tick(&st, &asr, &language).await {
                     let offset_ms = start_instant.elapsed().as_millis() as i64;
-                    let db = db.lock().await;
-                    if let Err(e) = db.add_meeting_segment(meeting_id, offset_ms, &text).await {
-                        tracing::warn!("Meeting: failed to save segment: {}", e);
+                    {
+                        let db = db.lock().await;
+                        if let Err(e) = db.add_meeting_segment(meeting_id, offset_ms, &text).await {
+                            tracing::warn!("Meeting: failed to save segment: {}", e);
+                        }
                     }
+                    // Live update for the Notetaker view (events = the fast path).
+                    app.emit(
+                        "meeting-segment",
+                        MeetingSegmentEvent { meeting_id, offset_ms, text },
+                    )
+                    .ok();
                 }
                 if !still {
                     break;
@@ -561,7 +623,7 @@ pub async fn start_meeting(
 #[command]
 pub async fn stop_meeting(
     state: State<'_, crate::app_state::AppState>,
-    _app: AppHandle,
+    app: AppHandle,
 ) -> Result<(), String> {
     if !state.meeting.recording.load(Ordering::Relaxed) {
         return Ok(());
@@ -596,6 +658,30 @@ pub async fn stop_meeting(
         db.finish_meeting(id, duration_ms)
             .await
             .map_err(|e| format!("Could not finalize meeting: {e}"))?;
+
+        // Auto-rename from the transcript, locally, if the user never set a title. Keeps the
+        // meeting list readable without any model or network call.
+        let mut final_title = db
+            .get_meeting(id)
+            .await
+            .ok()
+            .flatten()
+            .map(|m| m.title)
+            .unwrap_or_else(|| "Untitled meeting".to_string());
+        if final_title == "Untitled meeting" {
+            let segs = db.list_meeting_segments(id).await.unwrap_or_default();
+            let texts: Vec<String> = segs.into_iter().map(|s| s.text).collect();
+            if let Some(title) = derive_title(&texts) {
+                if db.rename_meeting(id, &title).await.is_ok() {
+                    final_title = title;
+                }
+            }
+        }
+        app.emit(
+            "meeting-finished",
+            MeetingFinishedEvent { meeting_id: id, title: final_title },
+        )
+        .ok();
     }
     tracing::info!("Meeting stopped");
     Ok(())
@@ -693,5 +779,26 @@ mod tests {
     fn to_asr_rate_guards_empty_and_zero_rate() {
         assert!(to_asr_rate(&[], 48000).is_empty());
         assert!(to_asr_rate(&[0.1, 0.2], 0).is_empty());
+    }
+
+    #[test]
+    fn derive_title_uses_first_sentence() {
+        let segs = vec![
+            "Okay let us kick off the design sync.".to_string(),
+            "First item is the layout.".to_string(),
+        ];
+        assert_eq!(derive_title(&segs).as_deref(), Some("Okay let us kick off the design sync"));
+    }
+
+    #[test]
+    fn derive_title_caps_to_eight_words() {
+        let segs = vec!["one two three four five six seven eight nine ten".to_string()];
+        assert_eq!(derive_title(&segs).as_deref(), Some("one two three four five six seven eight"));
+    }
+
+    #[test]
+    fn derive_title_none_on_empty() {
+        assert!(derive_title(&[]).is_none());
+        assert!(derive_title(&["   ".to_string()]).is_none());
     }
 }

@@ -30,7 +30,9 @@ export function NotetakerView() {
   const [selected, setSelected] = useState<MeetingDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [live, setLive] = useState<{ offset_ms: number; text: string }[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const liveEndRef = useRef<HTMLDivElement | null>(null)
 
   const loadMeetings = useCallback(async () => {
     try {
@@ -55,14 +57,39 @@ export function NotetakerView() {
     loadMeetings()
     refreshStatus()
     pollRef.current = setInterval(refreshStatus, 1000)
+
+    // Live transcript: append each segment as it is transcribed during capture.
+    const unlistens: Array<() => void> = []
+    ipc
+      .onMeetingSegment((p) => {
+        setLive((prev) => [...prev, { offset_ms: p.offset_ms, text: p.text }])
+      })
+      .then((u) => unlistens.push(u))
+      .catch(() => {}) // event system unavailable (e.g. preview harness) — polling still works
+    ipc
+      .onMeetingFinished(() => {
+        // Title may have been auto-generated; refresh the list to show it.
+        loadMeetings()
+      })
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
+      unlistens.forEach((u) => u())
     }
   }, [loadMeetings, refreshStatus])
+
+  // Keep the live transcript scrolled to the newest line.
+  useEffect(() => {
+    liveEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [live])
 
   const start = async () => {
     setError(null)
     setBusy(true)
+    setLive([])
+    setSelected(null)
     try {
       await ipc.startMeeting()
       await refreshStatus()
@@ -141,6 +168,33 @@ export function NotetakerView() {
           accurately than short dictation — this is a local model, not a cloud service.
         </p>
       </div>
+
+      {/* Live transcript — grows as the meeting is transcribed (every few seconds). */}
+      {recording && (
+        <div className="mb-3.5 rounded-[14px] border bg-card p-[18px]">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-[hsl(var(--record))]" aria-hidden />
+            <h3 className="text-sm font-medium">Live transcript</h3>
+          </div>
+          {live.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">
+              Listening… transcribed text will appear here as you speak.
+            </p>
+          ) : (
+            <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
+              {live.map((seg, i) => (
+                <div key={i} className="flex gap-3">
+                  <span className="mono shrink-0 pt-0.5 text-xs text-muted-foreground/70">
+                    {fmtDuration(seg.offset_ms)}
+                  </span>
+                  <p className="text-[13px] leading-relaxed">{seg.text}</p>
+                </div>
+              ))}
+              <div ref={liveEndRef} />
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="mb-3">

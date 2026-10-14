@@ -400,3 +400,22 @@ export async function renameMeeting(id: number, title: string): Promise<void> {
 export async function deleteMeeting(id: number): Promise<void> {
   return invoke('delete_meeting', { id })
 }
+
+/** Fires each time a window is transcribed during capture — for the live transcript. */
+export async function onMeetingSegment(
+  callback: (payload: { meeting_id: number; offset_ms: number; text: string }) => void
+) {
+  return listen<{ meeting_id: number; offset_ms: number; text: string }>(
+    'meeting-segment',
+    (e) => callback(e.payload)
+  )
+}
+
+/** Fires after Stop once the meeting is finalized and (maybe) auto-renamed. */
+export async function onMeetingFinished(
+  callback: (payload: { meeting_id: number; title: string }) => void
+) {
+  return listen<{ meeting_id: number; title: string }>('meeting-finished', (e) =>
+    callback(e.payload)
+  )
+}
