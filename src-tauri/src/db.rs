@@ -585,7 +585,7 @@ impl Database {
     /// Meetings, newest first, for the Notetaker list.
     pub async fn list_meetings(&self) -> Result<Vec<MeetingRow>, sqlx::Error> {
         sqlx::query_as::<_, MeetingRow>(
-            "SELECT id, title, started_at, ended_at, duration_ms, word_count, source
+            "SELECT id, title, started_at, ended_at, duration_ms, word_count, source, notes
              FROM meetings ORDER BY started_at DESC",
         )
         .fetch_all(&self.pool)
@@ -595,12 +595,61 @@ impl Database {
     /// A single meeting's header row.
     pub async fn get_meeting(&self, id: i64) -> Result<Option<MeetingRow>, sqlx::Error> {
         sqlx::query_as::<_, MeetingRow>(
-            "SELECT id, title, started_at, ended_at, duration_ms, word_count, source
+            "SELECT id, title, started_at, ended_at, duration_ms, word_count, source, notes
              FROM meetings WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
+    }
+
+    /// Save a meeting's free-text notes.
+    pub async fn save_meeting_notes(&self, id: i64, notes: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE meetings SET notes = $1 WHERE id = $2")
+            .bind(notes)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Edit one transcript segment's text, and keep the meeting's word_count consistent.
+    pub async fn update_meeting_segment(&self, segment_id: i64, text: &str) -> Result<(), sqlx::Error> {
+        // Which meeting does this segment belong to? Needed to recompute its word count.
+        let meeting_id: Option<(i64,)> =
+            sqlx::query_as("SELECT meeting_id FROM meeting_segments WHERE id = $1")
+                .bind(segment_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        sqlx::query("UPDATE meeting_segments SET text = $1 WHERE id = $2")
+            .bind(text)
+            .bind(segment_id)
+            .execute(&self.pool)
+            .await?;
+        if let Some((mid,)) = meeting_id {
+            let texts = sqlx::query_as::<_, (String,)>(
+                "SELECT text FROM meeting_segments WHERE meeting_id = $1",
+            )
+            .bind(mid)
+            .fetch_all(&self.pool)
+            .await?;
+            let wc: i64 = texts.iter().map(|(t,)| t.split_whitespace().count() as i64).sum();
+            sqlx::query("UPDATE meetings SET word_count = $1 WHERE id = $2")
+                .bind(wc)
+                .bind(mid)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Delete one transcript segment (editing out a line).
+    pub async fn delete_meeting_segment(&self, segment_id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM meeting_segments WHERE id = $1")
+            .bind(segment_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// A meeting's transcript segments, in time order.
@@ -773,6 +822,7 @@ pub struct MeetingRow {
     pub duration_ms: i64,
     pub word_count: i64,
     pub source: String,
+    pub notes: String,
 }
 
 /// One transcribed segment of a meeting, at `offset_ms` from its start.

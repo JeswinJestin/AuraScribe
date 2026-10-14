@@ -749,6 +749,38 @@ pub async fn delete_meeting(
     db.delete_meeting(id).await.map_err(|e| e.to_string())
 }
 
+/// Save a meeting's free-text notes ("My notes").
+#[command]
+pub async fn save_meeting_notes(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+    notes: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.save_meeting_notes(id, &notes).await.map_err(|e| e.to_string())
+}
+
+/// Edit one transcript segment's text.
+#[command]
+pub async fn update_meeting_segment(
+    state: State<'_, crate::app_state::AppState>,
+    segment_id: i64,
+    text: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.update_meeting_segment(segment_id, &text).await.map_err(|e| e.to_string())
+}
+
+/// Delete one transcript segment.
+#[command]
+pub async fn delete_meeting_segment(
+    state: State<'_, crate::app_state::AppState>,
+    segment_id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.delete_meeting_segment(segment_id).await.map_err(|e| e.to_string())
+}
+
 /// Produce a **local extractive summary** of a meeting from its transcript — no model, no cloud.
 /// Computed on demand so it always matches the current transcript. See `summary.rs`.
 #[command]

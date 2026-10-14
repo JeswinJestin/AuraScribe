@@ -65,8 +65,8 @@ const MOCK_TRANSCRIPTS = [
 
 const NOW = Math.floor(Date.now() / 1000)
 const MOCK_MEETINGS = [
-  { id: 2, title: 'Design sync', started_at: NOW - 3600, ended_at: NOW - 1800, duration_ms: 1_800_000, word_count: 1240, source: 'system+mic' },
-  { id: 1, title: 'Standup', started_at: NOW - 90000, ended_at: NOW - 89100, duration_ms: 900_000, word_count: 320, source: 'system+mic' },
+  { id: 2, title: 'Design sync', started_at: NOW - 3600, ended_at: NOW - 1800, duration_ms: 1_800_000, word_count: 1240, source: 'system+mic', notes: '' },
+  { id: 1, title: 'Standup', started_at: NOW - 90000, ended_at: NOW - 89100, duration_ms: 900_000, word_count: 320, source: 'system+mic', notes: '' },
 ]
 
 const MOCK: Record<string, unknown> = {
@@ -82,6 +82,10 @@ const MOCK: Record<string, unknown> = {
     ],
   },
   delete_meeting: null,
+  save_meeting_notes: null,
+  update_meeting_segment: null,
+  delete_meeting_segment: null,
+  rename_meeting: null,
   summarize_meeting: {
     key_points: [
       'The transcript should read top to bottom with timestamps on the left.',

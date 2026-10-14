@@ -121,6 +121,19 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-14 (later) — Notetaker: editable meetings (rename, My notes, edit transcript)
+
+Owner asked to make meetings maintainable like Wispr's "My thoughts". Added, all local:
+- **Rename** — inline-editable meeting title in the detail header (uses the existing
+  `rename_meeting`); a pencil affordance on hover.
+- **My notes** — free-text notes per meeting (migration `013_meeting_notes.sql` adds `meetings.notes`;
+  `save_meeting_notes` command, debounced autosave as you type). `MeetingRow`/`Meeting` gained `notes`,
+  and `list_meetings`/`get_meeting` SELECT it.
+- **Editable transcript** — click any line to edit it (`update_meeting_segment`, which also recomputes
+  `word_count`); clearing a line deletes it (`delete_meeting_segment`).
+`cargo test 105/105`, `tsc` clean, verified in `/preview` (title → inline textbox, notes field,
+click-to-edit lines).
+
 ### 2026-10-14 (later) — Notetaker: local summary (item A) + record-button visibility fix
 
 **Record button fix (owner-reported).** The Notetaker Start/Stop button used `btn-ink`, whose light

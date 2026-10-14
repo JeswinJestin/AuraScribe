@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Circle, Square, Trash2, FileText, Sparkles } from 'lucide-react'
+import { Circle, Square, Trash2, FileText, Sparkles, Pencil } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { Meeting, MeetingDetail, Summary } from '@/lib/ipc'
 import { PageHeader, EmptyState, ErrorNote } from '@/components/ui'
@@ -30,6 +30,12 @@ export function NotetakerView() {
   const [selected, setSelected] = useState<MeetingDetail | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [summarizing, setSummarizing] = useState(false)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [notesDraft, setNotesDraft] = useState('')
+  const [editingSeg, setEditingSeg] = useState<number | null>(null)
+  const [segDraft, setSegDraft] = useState('')
+  const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState<{ offset_ms: number; text: string }[]>([])
@@ -119,8 +125,59 @@ export function NotetakerView() {
   const open = async (id: number) => {
     setError(null)
     setSummary(null)
+    setEditingTitle(false)
+    setEditingSeg(null)
     try {
-      setSelected(await ipc.getMeeting(id))
+      const detail = await ipc.getMeeting(id)
+      setSelected(detail)
+      setNotesDraft(detail.meeting.notes ?? '')
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const saveTitle = async () => {
+    if (!selected) return
+    const title = titleDraft.trim()
+    setEditingTitle(false)
+    if (!title || title === selected.meeting.title) return
+    try {
+      await ipc.renameMeeting(selected.meeting.id, title)
+      setSelected({ ...selected, meeting: { ...selected.meeting, title } })
+      await loadMeetings()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  // Debounced autosave for the notes field, so typing doesn't hit the DB on every keystroke.
+  const onNotesChange = (value: string) => {
+    setNotesDraft(value)
+    if (!selected) return
+    const id = selected.meeting.id
+    if (notesTimer.current) clearTimeout(notesTimer.current)
+    notesTimer.current = setTimeout(() => {
+      ipc.saveMeetingNotes(id, value).catch((e) => setError(String(e)))
+    }, 600)
+  }
+
+  const saveSegment = async (segmentId: number) => {
+    if (!selected) return
+    const text = segDraft.trim()
+    setEditingSeg(null)
+    const seg = selected.segments.find((s) => s.id === segmentId)
+    if (!seg || text === seg.text) return
+    try {
+      if (text === '') {
+        await ipc.deleteMeetingSegment(segmentId)
+        setSelected({ ...selected, segments: selected.segments.filter((s) => s.id !== segmentId) })
+      } else {
+        await ipc.updateMeetingSegment(segmentId, text)
+        setSelected({
+          ...selected,
+          segments: selected.segments.map((s) => (s.id === segmentId ? { ...s, text } : s)),
+        })
+      }
     } catch (e) {
       setError(String(e))
     }
@@ -257,7 +314,31 @@ export function NotetakerView() {
       {selected && (
         <div className="mt-4 rounded-[14px] border bg-card p-[18px]">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="min-w-0 truncate text-sm font-medium">{selected.meeting.title}</h3>
+            {editingTitle ? (
+              <input
+                autoFocus
+                className="input min-w-0 flex-1 text-sm"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={saveTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveTitle()
+                  if (e.key === 'Escape') setEditingTitle(false)
+                }}
+              />
+            ) : (
+              <button
+                onClick={() => {
+                  setTitleDraft(selected.meeting.title)
+                  setEditingTitle(true)
+                }}
+                className="group flex min-w-0 items-center gap-1.5 text-left"
+                title="Rename meeting"
+              >
+                <h3 className="min-w-0 truncate text-sm font-medium">{selected.meeting.title}</h3>
+                <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
+              </button>
+            )}
             <div className="flex shrink-0 items-center gap-2">
               {selected.segments.length > 0 && (
                 <button
@@ -273,6 +354,17 @@ export function NotetakerView() {
                 Close
               </button>
             </div>
+          </div>
+
+          {/* My notes — free text, saved locally as you type. */}
+          <div className="mb-4">
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">My notes</label>
+            <textarea
+              className="input min-h-[72px] resize-y text-[13px] leading-relaxed"
+              placeholder="Type your own notes, action items, or follow-ups here…"
+              value={notesDraft}
+              onChange={(e) => onNotesChange(e.target.value)}
+            />
           </div>
 
           {/* Local extractive summary (no cloud, no model) — shown once generated. */}
@@ -309,6 +401,10 @@ export function NotetakerView() {
             </div>
           )}
 
+          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+            Transcript
+            <span className="ml-1.5 font-normal text-muted-foreground/60">· click a line to edit</span>
+          </label>
           {selected.segments.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">
               No speech was transcribed for this meeting.
@@ -320,7 +416,29 @@ export function NotetakerView() {
                   <span className="mono shrink-0 pt-0.5 text-xs text-muted-foreground/70">
                     {fmtDuration(seg.offset_ms)}
                   </span>
-                  <p className="text-[13px] leading-relaxed">{seg.text}</p>
+                  {editingSeg === seg.id ? (
+                    <textarea
+                      autoFocus
+                      className="input min-h-[52px] flex-1 resize-y text-[13px] leading-relaxed"
+                      value={segDraft}
+                      onChange={(e) => setSegDraft(e.target.value)}
+                      onBlur={() => saveSegment(seg.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') setEditingSeg(null)
+                      }}
+                    />
+                  ) : (
+                    <p
+                      onClick={() => {
+                        setSegDraft(seg.text)
+                        setEditingSeg(seg.id)
+                      }}
+                      className="flex-1 cursor-text rounded px-1 py-0.5 text-[13px] leading-relaxed hover:bg-secondary/50"
+                      title="Click to edit (clear the text to delete this line)"
+                    >
+                      {seg.text}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

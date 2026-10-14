@@ -354,6 +354,7 @@ export interface Meeting {
   duration_ms: number
   word_count: number
   source: string
+  notes: string
 }
 
 export interface MeetingSegment {
@@ -411,6 +412,18 @@ export interface Summary {
 
 export async function summarizeMeeting(id: number): Promise<Summary> {
   return invoke<Summary>('summarize_meeting', { id })
+}
+
+export async function saveMeetingNotes(id: number, notes: string): Promise<void> {
+  return invoke('save_meeting_notes', { id, notes })
+}
+
+export async function updateMeetingSegment(segmentId: number, text: string): Promise<void> {
+  return invoke('update_meeting_segment', { segmentId, text })
+}
+
+export async function deleteMeetingSegment(segmentId: number): Promise<void> {
+  return invoke('delete_meeting_segment', { segmentId })
 }
 
 /** Fires each time a window is transcribed during capture — for the live transcript. */
