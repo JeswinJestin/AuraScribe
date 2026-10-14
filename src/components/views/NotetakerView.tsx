@@ -144,13 +144,19 @@ export function NotetakerView() {
       <div className="mb-3.5 rounded-[14px] border bg-card p-[18px]">
         <div className="flex items-center gap-4">
           {recording ? (
-            <button onClick={stop} disabled={busy} className="btn-ink">
-              <Square className="h-4 w-4" />
-              Stop
+            <button
+              onClick={stop}
+              disabled={busy}
+              className="btn gap-2 text-white hover:opacity-90 disabled:opacity-50"
+              style={{ background: 'hsl(var(--record))' }}
+            >
+              <Square className="h-3.5 w-3.5" fill="currentColor" />
+              Stop recording
             </button>
           ) : (
-            <button onClick={start} disabled={busy} className="btn-ink">
-              <Circle className="h-4 w-4" />
+            <button onClick={start} disabled={busy} className="btn-primary gap-2 disabled:opacity-50">
+              {/* Red dot = the record affordance; colour means state (DESIGN.md). */}
+              <span className="h-2.5 w-2.5 rounded-full bg-[hsl(var(--record))]" aria-hidden />
               Start recording
             </button>
           )}
