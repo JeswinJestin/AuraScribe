@@ -807,12 +807,21 @@ pub async fn delete_meeting(
 pub async fn notetaker_ready(
     state: State<'_, crate::app_state::AppState>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     crate::panel::mark_ready();
     if state.meeting.recording.load(Ordering::Relaxed) {
         crate::panel::show(&app);
     }
-    Ok(())
+    // Return the user's selected theme so the panel paints the right surface reliably (reading it
+    // from the DB here is more robust than a second IPC round-trip from the panel window).
+    let theme = {
+        let db = state.db.lock().await;
+        crate::commands::load_settings_from_db(&db)
+            .await
+            .map(|s| s.theme)
+            .unwrap_or_else(|_| "glass".to_string())
+    };
+    Ok(theme)
 }
 
 /// Save a meeting's free-text notes ("My notes").

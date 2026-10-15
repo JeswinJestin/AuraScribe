@@ -157,6 +157,31 @@
   .glass-bg .app-shell * {
     border-color: rgba(255, 255, 255, 0.14);
   }
+  /* Browser surfaces follow the palette (craft floor): text selection, the caret, and a thin,
+     themed scrollbar instead of the OS default — the cheapest signal the app was designed. */
+  ::selection {
+    background: hsl(var(--primary) / 0.28);
+  }
+  * {
+    caret-color: hsl(var(--primary));
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--foreground) / 0.16);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--foreground) / 0.3);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
   /*
     Native <select> dropdowns default to an OS black popup, which looked jarring in dark/glass.
     The open option list can't be made truly translucent (the OS draws it), but it CAN follow

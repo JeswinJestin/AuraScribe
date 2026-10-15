@@ -427,9 +427,10 @@ export async function deleteMeetingSegment(segmentId: number): Promise<void> {
   return invoke('delete_meeting_segment', { segmentId })
 }
 
-/** The floating Notetaker panel calls this on load so the backend shows it if a meeting is live. */
-export async function notetakerReady(): Promise<void> {
-  return invoke('notetaker_ready')
+/** The floating Notetaker panel calls this on load; the backend shows it if a meeting is live and
+ *  returns the user's selected theme ('light' | 'dark' | 'system' | 'glass') for the panel surface. */
+export async function notetakerReady(): Promise<string> {
+  return invoke<string>('notetaker_ready')
 }
 
 export async function pauseMeeting(): Promise<void> {

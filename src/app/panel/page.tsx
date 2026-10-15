@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Square, Pencil, Sparkles, Minus, Pause, Play } from 'lucide-react'
+import { Square, Pencil, Sparkles, Minus, Pause, Play, Clock, Lightbulb } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { MeetingSegment, Summary } from '@/lib/ipc'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -15,11 +15,15 @@ function fmtClock(ms: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+function wordsIn(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length
+}
+
 /**
  * The floating Notetaker panel — a full-height, right-docked companion window shown while a meeting
- * records (the main app hides while it's up, like Wispr). It **respects the theme chosen in Settings**
- * (light / dark / system / glass) and always uses a solid, legible surface so text is readable and
- * writable. Tabs: My thoughts / Transcript / Summary, with a persistent bottom action bar. All local.
+ * records (the main app hides while it's up). It **matches the theme chosen in Settings** (returned
+ * by `notetaker_ready`) with a solid, legible surface in every theme. Tabs: My thoughts / Transcript
+ * / Summary, with a persistent bottom action bar. All local — no cloud.
  */
 export default function PanelPage() {
   const [tab, setTab] = useState<Tab>('transcript')
@@ -40,27 +44,13 @@ export default function PanelPage() {
   const liveEndRef = useRef<HTMLDivElement | null>(null)
   const loadedFor = useRef<number | null>(null)
 
-  // Apply the SAME theme the user picked in Settings (no longer hard-coded to glass).
-  useEffect(() => {
-    let mounted = true
-    ipc
-      .getSettings()
-      .then((s) => {
-        if (!mounted) return
-        const root = document.documentElement
-        root.classList.toggle('glass-bg', s.theme === 'glass')
-        if (s.theme === 'dark' || s.theme === 'glass') root.classList.add('dark')
-        else if (s.theme === 'light') root.classList.remove('dark')
-        else root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
-        setIsGlass(s.theme === 'glass')
-      })
-      .catch(() => {
-        // Settings unavailable (e.g. preview) — default to the app's dark surface.
-        document.documentElement.classList.add('dark')
-      })
-    return () => {
-      mounted = false
-    }
+  const applyTheme = useCallback((theme: string) => {
+    const root = document.documentElement
+    root.classList.toggle('glass-bg', theme === 'glass')
+    if (theme === 'dark' || theme === 'glass') root.classList.add('dark')
+    else if (theme === 'light') root.classList.remove('dark')
+    else root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
+    setIsGlass(theme === 'glass')
   }, [])
 
   const refreshStatus = useCallback(async () => {
@@ -96,12 +86,17 @@ export default function PanelPage() {
       .onMeetingSegment((p) => setLive((prev) => [...prev, { offset_ms: p.offset_ms, text: p.text }]))
       .then((u) => unlistens.push(u))
       .catch(() => {})
-    ipc.notetakerReady().catch(() => {})
+    // notetaker_ready returns the user's theme — apply it reliably (the in-panel settings fetch
+    // was racing/failing, which left the panel stuck on the light surface).
+    ipc
+      .notetakerReady()
+      .then((theme) => applyTheme(theme))
+      .catch(() => applyTheme('glass'))
     return () => {
       clearInterval(poll)
       unlistens.forEach((u) => u())
     }
-  }, [refreshStatus])
+  }, [refreshStatus, applyTheme])
 
   useEffect(() => {
     if (tab === 'transcript') liveEndRef.current?.scrollIntoView({ block: 'end' })
@@ -150,6 +145,8 @@ export default function PanelPage() {
   const minimize = () => getCurrentWindow().minimize().catch(() => {})
 
   const allLines = [...segments.map((s) => ({ offset_ms: s.offset_ms, text: s.text })), ...live]
+  const wordCount = allLines.reduce((n, l) => n + wordsIn(l.text), 0)
+  const readMin = Math.max(1, Math.round(wordCount / 200))
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'notes', label: 'My thoughts' },
@@ -157,9 +154,6 @@ export default function PanelPage() {
     { id: 'summary', label: 'Summary' },
   ]
 
-  // A solid, legible surface in every theme. Glass gets a rich navy gradient (self-contained, so it
-  // reads premium without relying on desktop blur, which WebView2 can't do on Windows); other themes
-  // use the theme's own card colour.
   const surface: React.CSSProperties = isGlass
     ? {
         backgroundImage:
@@ -173,17 +167,32 @@ export default function PanelPage() {
       style={surface}
     >
       {/* Header (draggable) */}
-      <div data-tauri-drag-region className="flex shrink-0 items-center gap-2 px-4 pb-2.5 pt-3.5">
-        <span
-          className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-            recording && !paused ? 'bg-[hsl(var(--record))]' : 'bg-muted-foreground/40'
-          }`}
-          aria-hidden
-        />
+      <div data-tauri-drag-region className="shrink-0 px-5 pb-3 pt-4">
+        <div className="mb-2 flex items-center gap-2">
+          <span
+            className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+              recording && !paused ? 'animate-pulse bg-[hsl(var(--record))]' : 'bg-muted-foreground/40'
+            }`}
+            aria-hidden
+          />
+          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {paused ? 'Paused' : recording ? 'Recording' : 'Notetaker'}
+          </span>
+          <span className="mono ml-auto text-[12px] tabular-nums text-muted-foreground">
+            {fmtClock(elapsed)}
+          </span>
+          <button
+            onClick={minimize}
+            className="btn-ghost -mr-1.5 shrink-0 rounded-md px-1.5 py-1"
+            aria-label="Minimize"
+          >
+            <Minus className="h-4 w-4" />
+          </button>
+        </div>
         {editingTitle ? (
           <input
             autoFocus
-            className="input h-7 min-w-0 flex-1 py-1 text-sm"
+            className="input h-9 w-full font-display text-[21px] font-medium"
             value={titleDraft}
             onChange={(e) => setTitleDraft(e.target.value)}
             onBlur={saveTitle}
@@ -198,28 +207,24 @@ export default function PanelPage() {
               setTitleDraft(title)
               setEditingTitle(true)
             }}
-            className="group flex min-w-0 items-center gap-1.5 text-left"
+            className="group flex w-full items-center gap-2 text-left"
             title="Rename meeting"
           >
-            <span className="min-w-0 truncate text-[15px] font-semibold">{title}</span>
+            <h1 className="min-w-0 truncate font-display text-[22px] font-medium leading-tight tracking-tight">
+              {title}
+            </h1>
             <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
           </button>
         )}
-        <span className="mono ml-auto shrink-0 text-[13px] tabular-nums text-muted-foreground">
-          {paused ? 'Paused' : fmtClock(elapsed)}
-        </span>
-        <button onClick={minimize} className="btn-ghost shrink-0 rounded-md px-1.5 py-1" aria-label="Minimize">
-          <Minus className="h-4 w-4" />
-        </button>
       </div>
 
       {/* Tabs */}
-      <div className="flex shrink-0 gap-6 border-b px-4">
+      <div className="flex shrink-0 gap-6 border-b px-5">
         {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`-mb-px border-b-2 pb-2.5 pt-1 text-sm font-medium transition-colors ${
+            className={`-mb-px border-b-2 pb-2.5 pt-1 text-[13.5px] font-medium transition-colors ${
               tab === t.id
                 ? 'border-[hsl(var(--primary))] text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -231,74 +236,104 @@ export default function PanelPage() {
       </div>
 
       {/* Content (fills) */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {tab === 'notes' && (
-          <textarea
-            className="h-full w-full resize-none rounded-lg border-0 bg-transparent px-0 py-0 text-[14.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus:outline-none"
-            placeholder="Write your notes here. A summary is generated on the Summary tab."
-            value={notes}
-            onChange={(e) => onNotesChange(e.target.value)}
-          />
+          <div className="flex h-full flex-col">
+            <textarea
+              className="min-h-0 flex-1 w-full resize-none border-0 bg-transparent px-0 py-0 text-[14.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus:outline-none"
+              placeholder="Jot your own notes, questions, or action items while you listen…"
+              value={notes}
+              onChange={(e) => onNotesChange(e.target.value)}
+            />
+            <p className="mt-2 shrink-0 text-[11px] text-muted-foreground/70">
+              Saved to this device only.
+            </p>
+          </div>
         )}
 
         {tab === 'transcript' && (
-          <div className="flex flex-col gap-3">
-            {allLines.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {paused
-                  ? 'Paused — transcription stopped. Press Resume to continue.'
-                  : 'Listening… transcribed text will appear here as the meeting goes on.'}
-              </p>
-            ) : (
-              allLines.map((seg, i) => (
-                <div key={i} className="flex gap-3">
-                  <span className="mono shrink-0 pt-0.5 text-[11px] tabular-nums text-muted-foreground/70">
-                    {fmtClock(seg.offset_ms)}
-                  </span>
-                  <p className="text-[14px] leading-relaxed">{seg.text}</p>
-                </div>
-              ))
+          <div>
+            {allLines.length > 0 && (
+              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border bg-secondary/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                <span className="mono tabular-nums">{fmtClock(elapsed)}</span>
+                <span className="text-muted-foreground/50">·</span>
+                <span className="mono tabular-nums">{wordCount}</span> words
+              </div>
             )}
-            <div ref={liveEndRef} />
+            <div className="flex flex-col gap-3">
+              {allLines.length === 0 ? (
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {paused
+                    ? 'Paused — transcription stopped. Press Resume to continue.'
+                    : 'Listening… transcribed text will appear here as the meeting goes on.'}
+                </p>
+              ) : (
+                allLines.map((seg, i) => (
+                  <div key={i} className="flex gap-3">
+                    <span className="mono shrink-0 select-none pt-[3px] text-[11px] tabular-nums text-muted-foreground/60">
+                      {fmtClock(seg.offset_ms)}
+                    </span>
+                    <p className="text-[14px] leading-relaxed">{seg.text}</p>
+                  </div>
+                ))
+              )}
+              <div ref={liveEndRef} />
+            </div>
           </div>
         )}
 
         {tab === 'summary' && (
           <div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              {summary && summary.key_points.length > 0 ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border bg-secondary/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+                  <Lightbulb className="h-3 w-3" />~{readMin} min read
+                </span>
+              ) : (
+                <span />
+              )}
+              <button
+                onClick={summarize}
+                disabled={summarizing || wordCount === 0}
+                className="btn-secondary btn-sm gap-1.5"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {summarizing ? 'Summarizing…' : summary ? 'Regenerate' : 'Generate'}
+              </button>
+            </div>
             {summary ? (
-              <div className="rounded-[12px] border bg-secondary/60 p-4">
-                <div className="mb-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  On-device summary
-                </div>
-                {summary.key_points.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Not enough speech yet.</p>
-                ) : (
-                  <ul className="flex list-disc flex-col gap-2 pl-5">
+              summary.key_points.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Not enough speech yet to summarize.</p>
+              ) : (
+                <div>
+                  <ul className="flex list-disc flex-col gap-2.5 pl-5 marker:text-muted-foreground/50">
                     {summary.key_points.map((p, i) => (
-                      <li key={i} className="text-[14px] leading-relaxed">
+                      <li key={i} className="pl-1 text-[14px] leading-relaxed">
                         {p}
                       </li>
                     ))}
                   </ul>
-                )}
-                {summary.keywords.length > 0 && (
-                  <div className="mt-3.5 flex flex-wrap gap-1.5">
-                    {summary.keywords.map((k) => (
-                      <span
-                        key={k}
-                        className="rounded-full border bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
-                      >
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+                  {summary.keywords.length > 0 && (
+                    <div className="mt-4 flex flex-wrap gap-1.5">
+                      {summary.keywords.map((k) => (
+                        <span
+                          key={k}
+                          className="rounded-full border px-2.5 py-0.5 text-[11px] text-muted-foreground"
+                        >
+                          {k}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
             ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-2 py-12 text-center">
-                <Sparkles className="h-5 w-5 text-muted-foreground/60" />
-                <p className="max-w-[260px] text-sm text-muted-foreground">
-                  Generate a local summary of what's been said so far — no cloud, no AI upload.
+              <div className="flex flex-col items-center justify-center gap-2.5 py-14 text-center">
+                <Lightbulb className="h-5 w-5 text-muted-foreground/50" />
+                <p className="max-w-[260px] text-sm leading-relaxed text-muted-foreground">
+                  Generate a local summary of what's been said so far — key points and topics, on your
+                  device, no cloud.
                 </p>
               </div>
             )}
@@ -307,15 +342,10 @@ export default function PanelPage() {
       </div>
 
       {/* Bottom action bar */}
-      <div className="flex shrink-0 items-center gap-2 border-t px-4 py-3">
-        {tab === 'summary' && (
-          <button onClick={summarize} disabled={summarizing} className="btn-primary flex-1 gap-1.5">
-            <Sparkles className="h-4 w-4" />
-            {summarizing ? 'Summarizing…' : summary ? 'Regenerate' : 'Generate summary'}
-          </button>
-        )}
+      <div className="flex shrink-0 items-center gap-2.5 border-t px-5 py-3.5">
         <button
           onClick={togglePause}
+          disabled={!recording}
           className="btn-secondary gap-1.5"
           title={paused ? 'Resume recording' : 'Pause recording'}
         >
@@ -324,7 +354,7 @@ export default function PanelPage() {
         </button>
         <button
           onClick={stop}
-          className={`btn gap-2 text-white hover:opacity-90 ${tab === 'summary' ? '' : 'flex-1'}`}
+          className="btn flex-1 gap-2 text-white hover:brightness-110"
           style={{ background: 'hsl(var(--record))' }}
         >
           <Square className="h-3.5 w-3.5" fill="currentColor" />

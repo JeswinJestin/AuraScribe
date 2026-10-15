@@ -121,6 +121,24 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-15 (later 4) — Notetaker panel: theme fix + premium redesign (impeccable pass)
+
+Owner: panel opened WHITE regardless of theme, and wanted Wispr-grade polish. Used the `impeccable`
+skill (craft floor) over the real warm-glass tokens (the stale "instrument" DESIGN.md is superseded).
+- **Theme fix (the white bug):** the in-panel `getSettings` was racing/failing, leaving the light
+  surface. `notetaker_ready` now **returns the user's theme** (read from the DB), and the panel
+  applies it from that return value — one reliable call. Falls back to glass.
+- **Premium redesign** (`panel/page.tsx`): **serif display title** (`font-display` Newsreader, like
+  the app + Wispr), per-tab **metadata chips** (Transcript: ⏱ duration · N words; Summary: ~N min
+  read), cleaner tabs/spacing to the craft floor, formatted summary bullets + keyword chips, a
+  "Saved to this device only" notes footer, and a polished Pause/Resume + Stop bar. Record dot pulses
+  while recording.
+- **Browser surfaces** (`globals.css`): themed **text selection, caret, and a thin scrollbar** from
+  the palette (craft-floor "cheapest signal it was designed"), app-wide.
+`cargo check` + `tsc` clean. Verified in the browser (glass populated: serif title, chips, bullets,
+keywords; light/dark surface mechanism verified earlier). Theme now comes from the backend so the
+white-everywhere bug is fixed at the source.
+
 ### 2026-10-15 (later 3) — Notetaker panel: theme-aware + legible, Pause/Resume, bigger
 
 Owner feedback: the panel forced the glass theme regardless of the Settings theme, the glass was
