@@ -5,11 +5,14 @@
 //! window — the user types notes into it — so it is NOT made click-through/non-activating.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 const PANEL_LABEL: &str = "panel";
-const WIDTH: f64 = 440.0;
-const HEIGHT: f64 = 600.0;
+const WIDTH: f64 = 400.0;
+const HEIGHT: f64 = 720.0;
+/// Margins when docking to the right edge (logical-ish px; applied to the physical monitor rect).
+const EDGE_GAP: i32 = 14;
+const BOTTOM_GAP: i32 = 56; // clear the Windows taskbar
 
 /// Set only by the panel page calling `notetaker_ready` — proof the page loaded (not a 404).
 static READY: AtomicBool = AtomicBool::new(false);
@@ -69,8 +72,9 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
-/// Dock the panel to the right edge of the monitor it is currently on, vertically centred — the
-/// familiar companion-panel position (and well clear of a meeting window on the left).
+/// Dock the panel to the **right edge, near full height** of the monitor it is currently on — the
+/// Wispr-style companion panel. Sizes the window to the monitor height (clear of the taskbar) and a
+/// fixed width, then positions it flush to the right with a small gap.
 fn position(window: &tauri::WebviewWindow) {
     let monitor = window
         .current_monitor()
@@ -80,15 +84,18 @@ fn position(window: &tauri::WebviewWindow) {
     if let Some(m) = monitor {
         let screen = m.size();
         let origin = m.position();
-        if let Ok(win) = window.outer_size() {
-            let x = origin.x as f64 + screen.width as f64 - win.width as f64 - 24.0;
-            let y = origin.y as f64 + (screen.height as f64 - win.height as f64) / 2.0;
-            let _ = window.set_position(PhysicalPosition::new(
-                x.max(origin.x as f64),
-                y.max(origin.y as f64),
-            ));
-            return;
-        }
+        let scale = m.scale_factor();
+        // Convert the logical margins/width to physical pixels for this monitor.
+        let gap = (EDGE_GAP as f64 * scale).round() as i32;
+        let bottom = (BOTTOM_GAP as f64 * scale).round() as i32;
+        let w = (WIDTH * scale).round() as u32;
+        let h = (screen.height as i32 - gap - bottom).max(300) as u32;
+
+        let _ = window.set_size(PhysicalSize::new(w, h));
+        let x = origin.x + screen.width as i32 - w as i32 - gap;
+        let y = origin.y + gap;
+        let _ = window.set_position(PhysicalPosition::new(x.max(origin.x), y.max(origin.y)));
+        return;
     }
-    let _ = window.set_position(PhysicalPosition::new(160.0, 120.0));
+    let _ = window.set_position(PhysicalPosition::new(160, 120));
 }

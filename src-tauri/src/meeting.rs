@@ -435,7 +435,7 @@ async fn process_tick(st: &MeetingState, asr: &Arc<crate::engine::Asr>, language
 
 // --- Tauri commands ------------------------------------------------------------------------------
 
-use tauri::{command, AppHandle, Emitter, State};
+use tauri::{command, AppHandle, Emitter, Manager, State};
 
 /// Returned by `meeting_status` so the UI can poll authoritative state (events are the fast path,
 /// not the only path — the CLAUDE.md rule).
@@ -615,7 +615,11 @@ pub async fn start_meeting(
         });
         *state.meeting.chunk_task.lock().await = Some(task);
 
-        // Pop the floating Notetaker panel (My thoughts / Transcript / Summary).
+        // Swap into "meeting mode": hide the main window and pop the floating Notetaker panel
+        // (My thoughts / Transcript / Summary), like Wispr. The main window returns on stop.
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.hide();
+        }
         crate::panel::show(&app);
 
         tracing::info!("Meeting started (id {})", meeting_id);
@@ -633,7 +637,12 @@ pub async fn stop_meeting(
         return Ok(());
     }
     state.meeting.recording.store(false, Ordering::Relaxed);
+    // Leave meeting mode: hide the panel and bring the main window back to the foreground.
     crate::panel::hide(&app);
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
 
     // Join native capture threads off the async runtime.
     let threads: Vec<_> = std::mem::take(&mut *state.meeting.threads.lock().await);

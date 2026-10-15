@@ -121,6 +121,26 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-15 (later 2) — Notetaker UX pass: window swap, full-height panel, calmer accent
+
+Owner feedback on the first panel build (wanted it Wispr-organized, main window to get out of the
+way, and the accent toned down). Changes:
+- **Window swap** (`meeting.rs`) — `start_meeting` now **hides the main window** and shows the panel;
+  `stop_meeting` hides the panel and **re-shows + focuses the main window**. "Meeting mode" like Wispr.
+- **Full-height right-docked panel** (`panel.rs`) — `position()` now sizes the window to the monitor
+  height (clear of the taskbar) at a fixed ~400px width and docks it flush right (DPI-scaled), instead
+  of a small centred box.
+- **Panel layout** (`panel/page.tsx`) — compact draggable header (title · elapsed · minimize), tabs,
+  a content area that fills, and a **persistent bottom bar** with a prominent **Stop & save** (plus
+  **Generate summary** on the Summary tab) — the Wispr bottom-anchored action pattern.
+- **Calmer accent** (`globals.css`) — `--primary` was neon `#4C6FFF` at **100% saturation**; toned to
+  a calm indigo (`228 64% 56%` light / `228 56% 64%` dark), with `--ring`/`--standby` matched. Fixes
+  the "button too bright / doesn't match" report for BOTH the Notetaker Start button and the Dictate
+  record button (same token).
+`cargo check` + `tsc` clean; panel full-height layout + toned button verified in the browser. **Window
+swap is Rust runtime — needs the owner's on-device run** (multi-window), same caveat as the overlay.
+**Release not re-cut yet** — iterate the design on local builds first, then re-tag v2.1.0.
+
 ### 2026-10-15 (later) — Floating Notetaker panel window
 
 Owner asked for a **separate floating window when a meeting starts** (like Wispr Flow's Notetaker
