@@ -121,6 +121,20 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-15 — v2.1.0 cut: PR #5 opened + release draft tagged
+
+All the 2026-10-13..15 work (Notepad paste-fix + E2E validation, Notetaker MVP → Phase 2 real-time +
+auto-rename, local extractive summary, editable meetings, opt-in fuzzy dictionary correction) is on
+branch `feat/notetaker-mvp-and-notepad-fix`, **pushed** and opened as
+**[PR #5](https://github.com/JeswinJestin/AuraScribe/pull/5)** (CI: `cargo test` + `tsc`). Version
+**bumped 2.0.3 → 2.1.0** across the four synced files; release notes at
+`docs/RELEASE-NOTES-v2.1.0.md`. Tag **`v2.1.0`** pushed → `release.yml` builds the 3-OS **draft**
+release. **TO PUBLISH:** merge PR #5 to master (prefer a merge commit so the tag stays on master, or
+re-tag master), confirm the new Notetaker features on-device (summary / fuzzy / editable meetings /
+auto-rename — Notepad fix + loopback capture already owner-verified), then publish the draft from the
+Releases page. **D (opt-in online AI endpoint) is NOT in this release** — pending the explicit
+build-it decision.
+
 ### 2026-10-14 (later) — Notetaker: editable meetings (rename, My notes, edit transcript)
 
 Owner asked to make meetings maintainable like Wispr's "My thoughts". Added, all local:
