@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 const PANEL_LABEL: &str = "panel";
-const WIDTH: f64 = 400.0;
-const HEIGHT: f64 = 720.0;
+const WIDTH: f64 = 480.0;
+const HEIGHT: f64 = 760.0;
 /// Margins when docking to the right edge (logical-ish px; applied to the physical monitor rect).
-const EDGE_GAP: i32 = 14;
-const BOTTOM_GAP: i32 = 56; // clear the Windows taskbar
+const EDGE_GAP: i32 = 12;
+const BOTTOM_GAP: i32 = 52; // clear the Windows taskbar
 
 /// Set only by the panel page calling `notetaker_ready` — proof the page loaded (not a 404).
 static READY: AtomicBool = AtomicBool::new(false);

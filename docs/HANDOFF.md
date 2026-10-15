@@ -121,6 +121,23 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-15 (later 3) — Notetaker panel: theme-aware + legible, Pause/Resume, bigger
+
+Owner feedback: the panel forced the glass theme regardless of the Settings theme, the glass was
+hard to read/write on, and it needed a Resume option + more size.
+- **Theme-aware & legible** (`panel/page.tsx`) — the panel now reads `settings.theme` and applies the
+  same light/dark/system/glass logic as the main app, and uses a **solid, legible surface** in every
+  theme (white card in light, dark card in dark, a self-contained rich **navy gradient** for glass —
+  no reliance on desktop backdrop-blur, which WebView2 can't do on Windows, which is why the old glass
+  looked flat/unreadable). Verified in the browser: light → white panel + ink text; dark → dark panel
+  + light text.
+- **Pause / Resume** — new `paused` state in `MeetingState`; the chunker discards captured audio while
+  paused (nothing transcribed) and the meeting stays open until Stop. `pause_meeting`/`resume_meeting`
+  commands + `meeting_status.paused`; a Pause/Resume button in the panel's bottom bar; the timer reads
+  "Paused".
+- **Bigger** — panel 400→**480px** wide, taller, smaller docking gaps.
+`cargo check` + `tsc` clean. Window/theme runtime still needs the owner's on-device confirmation.
+
 ### 2026-10-15 (later 2) — Notetaker UX pass: window swap, full-height panel, calmer accent
 
 Owner feedback on the first panel build (wanted it Wispr-organized, main window to get out of the

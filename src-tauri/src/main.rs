@@ -348,6 +348,8 @@ fn main() {
             meeting::update_meeting_segment,
             meeting::delete_meeting_segment,
             meeting::notetaker_ready,
+            meeting::pause_meeting,
+            meeting::resume_meeting,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

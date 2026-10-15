@@ -41,6 +41,9 @@ const ASR_RATE: u32 = 16_000;
 pub struct MeetingState {
     /// True while a meeting is being captured.
     pub recording: Arc<AtomicBool>,
+    /// True while the meeting is paused — capture threads stop appending audio, so nothing is
+    /// transcribed, but the meeting stays open until Stop. Resume clears it.
+    pub paused: Arc<AtomicBool>,
     /// The DB id of the meeting currently (or last) being recorded.
     pub meeting_id: Arc<Mutex<Option<i64>>>,
     /// When the current meeting started, for elapsed/offset computation.
@@ -61,6 +64,7 @@ impl Default for MeetingState {
     fn default() -> Self {
         Self {
             recording: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
             meeting_id: Arc::new(Mutex::new(None)),
             started: Arc::new(Mutex::new(None)),
             threads: Arc::new(Mutex::new(Vec::new())),
@@ -442,6 +446,7 @@ use tauri::{command, AppHandle, Emitter, Manager, State};
 #[derive(serde::Serialize)]
 pub struct MeetingStatus {
     pub recording: bool,
+    pub paused: bool,
     pub meeting_id: Option<i64>,
     pub elapsed_ms: i64,
 }
@@ -557,6 +562,7 @@ pub async fn start_meeting(
         *state.meeting.meeting_id.lock().await = Some(meeting_id);
         let start_instant = std::time::Instant::now();
         *state.meeting.started.lock().await = Some(start_instant);
+        state.meeting.paused.store(false, Ordering::Relaxed);
         state.meeting.recording.store(true, Ordering::Relaxed);
 
         // Loopback (system output) capture thread.
@@ -591,6 +597,16 @@ pub async fn start_meeting(
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
                 let still = st.recording.load(Ordering::Relaxed);
+                // While paused, throw away anything the capture threads buffered and transcribe
+                // nothing — the meeting stays open until Stop/Resume.
+                if st.paused.load(Ordering::Relaxed) {
+                    st.system_buf.lock().await.clear();
+                    st.mic_buf.lock().await.clear();
+                    if !still {
+                        break;
+                    }
+                    continue;
+                }
                 if let Some(text) = process_tick(&st, &asr, &language).await {
                     let offset_ms = start_instant.elapsed().as_millis() as i64;
                     {
@@ -637,6 +653,7 @@ pub async fn stop_meeting(
         return Ok(());
     }
     state.meeting.recording.store(false, Ordering::Relaxed);
+    state.meeting.paused.store(false, Ordering::Relaxed);
     // Leave meeting mode: hide the panel and bring the main window back to the foreground.
     crate::panel::hide(&app);
     if let Some(main) = app.get_webview_window("main") {
@@ -706,6 +723,7 @@ pub async fn meeting_status(
     state: State<'_, crate::app_state::AppState>,
 ) -> Result<MeetingStatus, String> {
     let recording = state.meeting.recording.load(Ordering::Relaxed);
+    let paused = state.meeting.paused.load(Ordering::Relaxed);
     let meeting_id = *state.meeting.meeting_id.lock().await;
     let elapsed_ms = if recording {
         state
@@ -718,7 +736,27 @@ pub async fn meeting_status(
     } else {
         0
     };
-    Ok(MeetingStatus { recording, meeting_id, elapsed_ms })
+    Ok(MeetingStatus { recording, paused, meeting_id, elapsed_ms })
+}
+
+/// Pause the meeting — stop transcribing (capture audio is discarded) but keep it open.
+#[command]
+pub async fn pause_meeting(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    if state.meeting.recording.load(Ordering::Relaxed) {
+        state.meeting.paused.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Resume a paused meeting.
+#[command]
+pub async fn resume_meeting(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    state.meeting.paused.store(false, Ordering::Relaxed);
+    Ok(())
 }
 
 #[command]

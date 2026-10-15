@@ -367,6 +367,7 @@ export interface MeetingSegment {
 
 export interface MeetingStatus {
   recording: boolean
+  paused: boolean
   meeting_id: number | null
   elapsed_ms: number
 }
@@ -429,6 +430,14 @@ export async function deleteMeetingSegment(segmentId: number): Promise<void> {
 /** The floating Notetaker panel calls this on load so the backend shows it if a meeting is live. */
 export async function notetakerReady(): Promise<void> {
   return invoke('notetaker_ready')
+}
+
+export async function pauseMeeting(): Promise<void> {
+  return invoke('pause_meeting')
+}
+
+export async function resumeMeeting(): Promise<void> {
+  return invoke('resume_meeting')
 }
 
 /** Fires each time a window is transcribed during capture — for the live transcript. */
