@@ -549,4 +549,190 @@ mod tests {
         assert!(long.chars().count() > PASTE_THRESHOLD);
         // Both lengths take the same (paste) route on Windows; nothing here routes to typing.
     }
+
+    /// END-TO-END validation of the Notepad fix against the REAL Windows 11 Notepad — the exact
+    /// scenario a user (Ryan) reported garbling as "......"/"?????".
+    ///
+    /// It launches Notepad, injects a short, punctuation-heavy phrase via the **production**
+    /// `inject_text` (which pastes), then selects-all + copies so the clipboard holds precisely
+    /// what Notepad actually contains, and asserts it is byte-for-byte the input. If the old
+    /// typing-path bug were present, the readback would be mangled and this fails.
+    ///
+    /// `#[ignore]` because it opens a real GUI window and needs an interactive desktop. Run it with:
+    ///   cargo test --manifest-path src-tauri/Cargo.toml notepad_injection -- --ignored --nocapture
+    ///
+    /// NOTE: the modern Windows 11 Notepad is **single-instance**, so this may attach to a Notepad
+    /// window you already have open rather than the fresh temp file it launches. **Close other
+    /// Notepad windows before running** so it doesn't paste the probe text into your own document.
+    /// The assertion uses `contains` (not `==`) for exactly that reason: it proves the clean string
+    /// was delivered even if the target buffer already held other text.
+    #[test]
+    #[ignore]
+    fn notepad_injection_round_trips_exact_text() {
+        use std::process::Command;
+        use std::{thread, time::Duration};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+            VK_CONTROL,
+        };
+
+        // The reported failure was short phrases with punctuation, apostrophes and question marks.
+        const TEST: &str = "What can be done? I'm not sure... really?";
+
+        // Press Ctrl + <vk> as a single chord.
+        unsafe fn ctrl_combo(vk: u16) {
+            let key = |v: VIRTUAL_KEY, up: bool| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: v,
+                        wScan: 0,
+                        dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            let inputs = [
+                key(VK_CONTROL, false),
+                key(VIRTUAL_KEY(vk), false),
+                key(VIRTUAL_KEY(vk), true),
+                key(VK_CONTROL, true),
+            ];
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+
+        use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+            GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
+
+        // Collect every visible, titled top-level window, so we can pick OUR window by a unique
+        // marker in its title (not just any "Notepad", which could be the user's own document).
+        unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let acc = &mut *(lparam.0 as *mut Vec<(isize, String)>);
+            if IsWindowVisible(hwnd).as_bool() {
+                let len = GetWindowTextLengthW(hwnd);
+                if len > 0 {
+                    let mut buf = vec![0u16; (len + 1) as usize];
+                    let n = GetWindowTextW(hwnd, &mut buf);
+                    acc.push((hwnd.0 as isize, String::from_utf16_lossy(&buf[..n as usize])));
+                }
+            }
+            BOOL(1)
+        }
+        unsafe fn find_window(needle: &str) -> Option<HWND> {
+            let mut acc: Vec<(isize, String)> = Vec::new();
+            let _ = EnumWindows(Some(enum_cb), LPARAM(&mut acc as *mut _ as isize));
+            acc.into_iter()
+                .find(|(_, t)| t.contains(needle))
+                .map(|(h, _)| HWND(h as *mut _))
+        }
+        // AttachThreadInput lets us steal foreground reliably (Windows otherwise blocks it).
+        unsafe fn force_foreground(hwnd: HWND) {
+            let fg = GetForegroundWindow();
+            let fg_thread = GetWindowThreadProcessId(fg, None);
+            let this = GetCurrentThreadId();
+            let _ = AttachThreadInput(this, fg_thread, true);
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = AttachThreadInput(this, fg_thread, false);
+        }
+
+        // Open Notepad on a FRESH, EMPTY temp file with a unique name, so we target our own
+        // window — never the user's open documents — and start from a clean, known-empty buffer.
+        let stem = format!("aurascribe_notepad_test_{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{stem}.txt"));
+        std::fs::write(&path, "").expect("failed to create temp file");
+        let mut child = Command::new("notepad.exe")
+            .arg(&path)
+            .spawn()
+            .expect("failed to launch notepad.exe");
+        let hwnd = {
+            let mut h = None;
+            for _ in 0..40 {
+                thread::sleep(Duration::from_millis(200));
+                if let Some(found) = unsafe { find_window(&stem) } {
+                    h = Some(found);
+                    break;
+                }
+            }
+            h.expect("our Notepad window did not appear")
+        };
+        unsafe { force_foreground(hwnd) };
+        thread::sleep(Duration::from_millis(700));
+
+        // Inject through the real production path (pastes on Windows).
+        let injector = TextInjector::new();
+        injector.inject_text(TEST).expect("inject_text returned an error");
+        thread::sleep(Duration::from_millis(700)); // paste is delivered asynchronously
+
+        // Select back ONLY the text we just pasted (cursor is at its end), copy it, then delete it
+        // — so the readback is exactly our string and any pre-existing document content is left
+        // untouched. TEST is all BMP, so char count == UTF-16 caret steps.
+        let n = TEST.chars().count() as u32;
+        unsafe {
+            // Hold Shift, press Left n times, release Shift.
+            let mk = |v: VIRTUAL_KEY, up: bool| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: v,
+                        wScan: 0,
+                        dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            const VK_SHIFT: VIRTUAL_KEY = VIRTUAL_KEY(0x10);
+            const VK_LEFT: VIRTUAL_KEY = VIRTUAL_KEY(0x25);
+            let mut inputs = vec![mk(VK_SHIFT, false)];
+            for _ in 0..n {
+                inputs.push(mk(VK_LEFT, false));
+                inputs.push(mk(VK_LEFT, true));
+            }
+            inputs.push(mk(VK_SHIFT, true));
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+            thread::sleep(Duration::from_millis(150));
+            ctrl_combo(0x43); // Ctrl+C — copy just our selection
+        }
+        thread::sleep(Duration::from_millis(400));
+
+        let landed = read_clipboard_text().unwrap_or_default();
+
+        // Non-destructive cleanup: our text is still selected — delete it so the document returns
+        // to exactly its prior state, then close our launched instance.
+        unsafe {
+            let mk = |v: VIRTUAL_KEY, up: bool| INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: v,
+                        wScan: 0,
+                        dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+            const VK_DELETE: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
+            let inputs = [mk(VK_DELETE, false), mk(VK_DELETE, true)];
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+        let _ = child.kill();
+        let _ = std::fs::remove_file(&path);
+
+        eprintln!("injected: {TEST:?}");
+        eprintln!("landed:   {landed:?}");
+        // The fix is proven if the EXACT string is present, clean — the old typing bug would have
+        // turned it into runs of "......"/"?????", so a verbatim match cannot occur under the bug.
+        assert!(
+            landed.contains(TEST),
+            "Notepad did not receive the exact text — got {landed:?}"
+        );
+        assert!(!landed.contains("?????"), "output contains the '?????' corruption pattern");
+    }
 }

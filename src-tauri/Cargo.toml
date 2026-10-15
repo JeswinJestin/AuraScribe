@@ -84,6 +84,9 @@ windows = { version = "0.58", features = [
     # loopback crate — see docs/superpowers/specs/2026-10-13-notetaker-design.md.
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",
+    # GetCurrentThreadId — used only by the ignored end-to-end Notepad validation test to force the
+    # Notepad window to the foreground (AttachThreadInput) before injecting.
+    "Win32_System_Threading",
 ] }
 winreg = "0.52"
 
