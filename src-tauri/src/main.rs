@@ -23,6 +23,7 @@ mod dolphin;
 mod nemo_ctc;
 mod optimize;
 mod overlay;
+mod panel;
 mod sound;
 mod storage;
 mod summary;
@@ -238,6 +239,7 @@ fn main() {
 
             tray::build(&app_handle)?;
             overlay::create(&app_handle)?;
+            panel::create(&app_handle)?;
 
             if settings.hotkey_enabled == 0 {
                 tracing::info!("Dictation hotkey disabled in settings; not registering it.");
@@ -345,6 +347,7 @@ fn main() {
             meeting::save_meeting_notes,
             meeting::update_meeting_segment,
             meeting::delete_meeting_segment,
+            meeting::notetaker_ready,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

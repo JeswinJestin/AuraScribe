@@ -9,6 +9,9 @@ Record a meeting and get a transcript — entirely on your device. Notetaker cap
 the call (system audio)** plus **your microphone**, and transcribes it locally with the model you
 already use for dictation.
 
+- **🆕 A floating Notetaker panel** pops up when you start a meeting — a clean companion window with
+  **My thoughts / Transcript / Summary** tabs, a live transcript, and a one-click **Stop**. Jot notes
+  while you listen, right beside your call.
 - **Real-time transcript** that builds up live while you record.
 - **Local summary** — key points + keywords, extracted on-device (no model download, no cloud, and it
   can't make things up).

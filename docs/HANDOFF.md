@@ -121,6 +121,26 @@ machine-path leaks in the pushable tree.
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
 
+### 2026-10-15 (later) — Floating Notetaker panel window
+
+Owner asked for a **separate floating window when a meeting starts** (like Wispr Flow's Notetaker
+panel). Built, mirroring the proven `overlay.rs` secondary-window lifecycle:
+- **`panel.rs`** (new) — a `panel`-labelled, 440×600, frameless, transparent, always-on-top,
+  **interactive** (not click-through) window; created hidden at setup, `show()` on `start_meeting`,
+  `hide()` on `stop_meeting`, with a `READY` flag + `notetaker_ready` command (catch-up show if the
+  page loads after a meeting started) — same 404-safety and is_dev path handling as the overlay.
+  Added `panel` to `capabilities/default.json` windows.
+- **`src/app/panel/page.tsx`** (new) — the floating UI in AuraScribe's glass theme: draggable header
+  (editable title · elapsed · minimize · **Stop**) + **My thoughts / Transcript / Summary** tabs. The
+  transcript appends live via the `meeting-segment` event; notes autosave; summary on demand. Clean,
+  Wispr-like, but 100% local.
+- `meeting.rs` shows/hides the panel on start/stop and emits segments to it.
+
+**Verified:** `cargo check` clean, `tsc` clean, and the panel rendered + tab-switching exercised in
+the browser (header, tabs, Stop, glass theme all correct). **NOT verified from the sandbox:** the
+window actually showing on meeting start (multi-window Tauri runtime) — needs the owner's on-device
+run, same as the overlay. Release notes updated to announce the panel.
+
 ### 2026-10-15 — v2.1.0 cut: PR #5 opened + release draft tagged
 
 All the 2026-10-13..15 work (Notepad paste-fix + E2E validation, Notetaker MVP → Phase 2 real-time +

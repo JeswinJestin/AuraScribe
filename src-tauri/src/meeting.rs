@@ -581,7 +581,7 @@ pub async fn start_meeting(
         let st = state.meeting.clone();
         let asr = state.asr.clone();
         let db = state.db.clone();
-        let app = app.clone();
+        let app_task = app.clone();
         let task = tokio::spawn(async move {
             loop {
                 for _ in 0..(CHUNK_SECS * 10) {
@@ -599,12 +599,13 @@ pub async fn start_meeting(
                             tracing::warn!("Meeting: failed to save segment: {}", e);
                         }
                     }
-                    // Live update for the Notetaker view (events = the fast path).
-                    app.emit(
-                        "meeting-segment",
-                        MeetingSegmentEvent { meeting_id, offset_ms, text },
-                    )
-                    .ok();
+                    // Live update for the Notetaker view + panel (events = the fast path).
+                    app_task
+                        .emit(
+                            "meeting-segment",
+                            MeetingSegmentEvent { meeting_id, offset_ms, text },
+                        )
+                        .ok();
                 }
                 if !still {
                     break;
@@ -613,6 +614,9 @@ pub async fn start_meeting(
             tracing::info!("Meeting chunker finished (meeting {})", meeting_id);
         });
         *state.meeting.chunk_task.lock().await = Some(task);
+
+        // Pop the floating Notetaker panel (My thoughts / Transcript / Summary).
+        crate::panel::show(&app);
 
         tracing::info!("Meeting started (id {})", meeting_id);
         Ok(meeting_id)
@@ -629,6 +633,7 @@ pub async fn stop_meeting(
         return Ok(());
     }
     state.meeting.recording.store(false, Ordering::Relaxed);
+    crate::panel::hide(&app);
 
     // Join native capture threads off the async runtime.
     let threads: Vec<_> = std::mem::take(&mut *state.meeting.threads.lock().await);
@@ -747,6 +752,20 @@ pub async fn delete_meeting(
 ) -> Result<(), String> {
     let db = state.db.lock().await;
     db.delete_meeting(id).await.map_err(|e| e.to_string())
+}
+
+/// The floating Notetaker panel page reports it has loaded. Marks the panel ready and, if a meeting
+/// is already recording (the panel finished loading after the meeting started), shows it now.
+#[command]
+pub async fn notetaker_ready(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    crate::panel::mark_ready();
+    if state.meeting.recording.load(Ordering::Relaxed) {
+        crate::panel::show(&app);
+    }
+    Ok(())
 }
 
 /// Save a meeting's free-text notes ("My notes").

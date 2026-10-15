@@ -426,6 +426,11 @@ export async function deleteMeetingSegment(segmentId: number): Promise<void> {
   return invoke('delete_meeting_segment', { segmentId })
 }
 
+/** The floating Notetaker panel calls this on load so the backend shows it if a meeting is live. */
+export async function notetakerReady(): Promise<void> {
+  return invoke('notetaker_ready')
+}
+
 /** Fires each time a window is transcribed during capture — for the live transcript. */
 export async function onMeetingSegment(
   callback: (payload: { meeting_id: number; offset_ms: number; text: string }) => void
