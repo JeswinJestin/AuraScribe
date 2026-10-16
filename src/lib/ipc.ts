@@ -388,8 +388,13 @@ export interface MeetingDetail {
   speakers: Speaker[]
 }
 
-export async function startMeeting(title?: string): Promise<number> {
-  return invoke<number>('start_meeting', { title: title ?? null })
+export async function startMeeting(title?: string, resumeId?: number): Promise<number> {
+  return invoke<number>('start_meeting', { title: title ?? null, resumeId: resumeId ?? null })
+}
+
+/** Resume a finished meeting — continues capture into it, appending new lines. */
+export async function resumeMeetingRecording(id: number): Promise<number> {
+  return invoke<number>('start_meeting', { title: null, resumeId: id })
 }
 
 export async function stopMeeting(): Promise<void> {

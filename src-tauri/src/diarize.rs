@@ -125,10 +125,16 @@ impl OnlineClusterer {
     /// `join_threshold`: minimum cosine similarity to an existing centroid to join it rather than
     /// start a new speaker. ~0.5–0.7 for typical speaker embeddings; tuned on-device.
     pub fn new(join_threshold: f32) -> Self {
+        Self::with_base(join_threshold, SELF_CLUSTER + 1)
+    }
+
+    /// Like [`Self::new`] but new guest ids start at `base` — used when resuming a meeting so a new
+    /// voice doesn't reuse an existing speaker's id.
+    pub fn with_base(join_threshold: f32, base: i64) -> Self {
         Self {
             clusters: Vec::new(),
             history: Vec::new(),
-            next_id: SELF_CLUSTER + 1,
+            next_id: base.max(SELF_CLUSTER + 1),
             join_threshold,
         }
     }

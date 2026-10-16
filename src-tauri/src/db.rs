@@ -665,6 +665,16 @@ impl Database {
                 .map(|(t,)| t.split_whitespace().count() as i64)
                 .sum()
         };
+        // Never let a resumed session shrink the stored length: the true duration is at least the
+        // last segment's offset (which, on resume, already includes the prior session's time).
+        let max_offset: i64 =
+            sqlx::query_as::<_, (Option<i64>,)>("SELECT MAX(offset_ms) FROM meeting_segments WHERE meeting_id = $1")
+                .bind(meeting_id)
+                .fetch_one(&self.pool)
+                .await?
+                .0
+                .unwrap_or(0);
+        let duration_ms = duration_ms.max(max_offset);
         sqlx::query(
             "UPDATE meetings SET ended_at = $1, duration_ms = $2, word_count = $3 WHERE id = $4",
         )

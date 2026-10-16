@@ -193,6 +193,23 @@ export function NotetakerView() {
     }
   }
 
+  const resume = async () => {
+    if (!selected || recording) return
+    setError(null)
+    setBusy(true)
+    setLive([])
+    setLiveSpeakers([])
+    try {
+      await ipc.resumeMeetingRecording(selected.meeting.id)
+      setSelected(null)
+      await refreshStatus()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const start = async () => {
     setError(null)
     setBusy(true)
@@ -527,6 +544,15 @@ export function NotetakerView() {
               </button>
             )}
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={resume}
+                disabled={busy || recording}
+                className="btn-secondary btn-sm gap-1.5"
+                title="Continue recording into this meeting"
+              >
+                <Circle className="h-3 w-3" fill="currentColor" />
+                Resume
+              </button>
               {selected.segments.length > 0 && (
                 <button
                   onClick={summarize}

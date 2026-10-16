@@ -587,15 +587,18 @@ pub struct MeetingDetail {
 }
 
 /// Start capturing + transcribing a meeting. System-audio loopback is Windows-only in this MVP.
+/// When `resume_id` is set, continues an existing (finished) meeting instead of creating a new one:
+/// new segments append after its transcript and speaker naming carries over.
 #[command]
 pub async fn start_meeting(
     state: State<'_, crate::app_state::AppState>,
     app: AppHandle,
     title: Option<String>,
+    resume_id: Option<i64>,
 ) -> Result<i64, String> {
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (&state, &title, &app);
+        let _ = (&state, &title, &app, &resume_id);
         return Err(
             "Meeting capture records system audio (what you hear in the call), which is only \
              supported on Windows right now. It is coming to macOS/Linux later."
@@ -623,12 +626,35 @@ pub async fn start_meeting(
                 .unwrap_or((None, "en".to_string()))
         };
 
-        let title = title.unwrap_or_else(|| "Untitled meeting".to_string());
-        let meeting_id = {
+        // Fresh meeting, or resume an existing one. When resuming, seed the naming turns and the
+        // continuing time offset from the stored transcript so new lines follow the old ones.
+        let (meeting_id, offset_base_ms, seed_turns, guest_base) = if let Some(id) = resume_id {
             let db = state.db.lock().await;
-            db.create_meeting(&title, "system+mic")
+            let meeting = db
+                .get_meeting(id)
                 .await
-                .map_err(|e| format!("Could not create meeting: {e}"))?
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Meeting to resume not found".to_string())?;
+            let segs = db.list_meeting_segments(id).await.map_err(|e| e.to_string())?;
+            let base = segs.iter().map(|s| s.offset_ms).max().unwrap_or(0).max(meeting.duration_ms)
+                + CHUNK_SECS as i64 * 1000;
+            let turns: Vec<crate::diarize::Turn> = segs
+                .iter()
+                .map(|s| crate::diarize::Turn { cluster: s.speaker_cluster, text: s.text.clone() })
+                .collect();
+            // Continue guest numbering above the highest existing guest so a new voice can't reuse
+            // (and visually merge with) an old speaker's id.
+            let gbase = segs.iter().map(|s| s.speaker_cluster).max().unwrap_or(0).max(0) + 1;
+            (id, base, turns, gbase)
+        } else {
+            let title = title.unwrap_or_else(|| "Untitled meeting".to_string());
+            let id = {
+                let db = state.db.lock().await;
+                db.create_meeting(&title, "system+mic")
+                    .await
+                    .map_err(|e| format!("Could not create meeting: {e}"))?
+            };
+            (id, 0i64, Vec::new(), crate::diarize::SELF_CLUSTER + 1)
         };
 
         // Reset buffers/state for a fresh capture.
@@ -685,15 +711,17 @@ pub async fn start_meeting(
                 None
             };
         let embedder = Arc::new(std::sync::Mutex::new(embedder));
+        let allow_recluster = resume_id.is_none();
 
         let task = tokio::spawn(async move {
-            // Attributed turns so far, for live name resolution; and the last speaker labels we
-            // emitted, so we only re-upsert/re-emit when something actually changed.
-            let mut turns: Vec<crate::diarize::Turn> = Vec::new();
+            // Attributed turns so far, for live name resolution (seeded from the transcript when
+            // resuming); and the last speaker labels we emitted, so we only re-emit on change.
+            let mut turns: Vec<crate::diarize::Turn> = seed_turns;
             let mut last_labels: Vec<(i64, String)> = Vec::new();
             // Layer B: online clusterer for guest voices, active only when the embedder loaded.
+            // Guest ids continue above any existing speaker when resuming.
             let mut clusterer = if embedder.lock().map(|g| g.is_some()).unwrap_or(false) {
-                Some(crate::diarize::OnlineClusterer::new(JOIN_THRESHOLD))
+                Some(crate::diarize::OnlineClusterer::with_base(JOIN_THRESHOLD, guest_base))
             } else {
                 None
             };
@@ -745,7 +773,7 @@ pub async fn start_meeting(
                         }
                     };
                     ticks += 1;
-                    let offset_ms = start_instant.elapsed().as_millis() as i64;
+                    let offset_ms = offset_base_ms + start_instant.elapsed().as_millis() as i64;
                     {
                         let db = db.lock().await;
                         if let Err(e) =
@@ -775,7 +803,9 @@ pub async fn start_meeting(
                     // fix drift (merge an over-split voice). Remap the stored + in-memory + live
                     // cluster ids so the whole transcript stays consistent.
                     if let Some(clust) = clusterer.as_mut() {
-                        if ticks % RECLUSTER_EVERY == 0 {
+                        // Self-correction is disabled when resuming: the clusterer only holds this
+                        // session's voices, so renumbering would collide with the seeded speakers.
+                        if allow_recluster && ticks % RECLUSTER_EVERY == 0 {
                             let remap = clust.recluster(MERGE_THRESHOLD);
                             let changed: Vec<(i64, i64)> =
                                 remap.iter().filter(|(o, n)| o != n).map(|(&o, &n)| (o, n)).collect();
