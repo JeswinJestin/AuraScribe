@@ -473,8 +473,8 @@ export function NotetakerView() {
                       key={m.id}
                       className={`group/row flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors ${
                         isOpen
-                          ? 'bg-muted ring-1 ring-inset ring-[hsl(var(--primary)/0.35)]'
-                          : 'hover:bg-muted/70'
+                          ? 'bg-[hsl(var(--primary)/0.14)] ring-1 ring-inset ring-[hsl(var(--primary)/0.30)]'
+                          : 'hover:bg-[hsl(var(--primary)/0.08)]'
                       }`}
                     >
                       <button
