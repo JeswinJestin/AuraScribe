@@ -411,8 +411,13 @@ fn transcribe_window(asr: &crate::engine::Asr, samples: &[f32], language: &str) 
 }
 
 /// One drain-and-transcribe tick: take everything captured so far from both sources, resample,
-/// mix, transcribe, and append a segment. Returns the segment text if any was produced.
-async fn process_tick(st: &MeetingState, asr: &Arc<crate::engine::Asr>, language: &str) -> Option<String> {
+/// attribute the window to a speaker from the two channels' energy, mix, transcribe, and return
+/// the text plus which speaker cluster it belongs to (0 = You, 1 = a guest).
+async fn process_tick(
+    st: &MeetingState,
+    asr: &Arc<crate::engine::Asr>,
+    language: &str,
+) -> Option<(String, i64)> {
     let (sys, sys_rate, mic, mic_rate) = {
         let mut sb = st.system_buf.lock().await;
         let mut mb = st.mic_buf.lock().await;
@@ -425,16 +430,28 @@ async fn process_tick(st: &MeetingState, asr: &Arc<crate::engine::Asr>, language
     }
     let sys16 = to_asr_rate(&sys, sys_rate);
     let mic16 = to_asr_rate(&mic, mic_rate);
+    // Layer A: which channel carries this window decides the speaker. "You" when the mic dominates;
+    // otherwise a guest. (Guests are a single cluster until the embedding model splits them.)
+    let channel = crate::diarize::attribute_channel(
+        crate::diarize::rms(&mic16),
+        crate::diarize::rms(&sys16),
+    );
+    let cluster = match channel {
+        crate::diarize::Channel::Self_ => crate::diarize::SELF_CLUSTER,
+        _ => crate::diarize::SELF_CLUSTER + 1,
+    };
+    // Transcribe the full mixed window (so no words are lost regardless of who spoke).
     let mixed = mix_streams(&sys16, &mic16);
     if mixed.is_empty() {
         return None;
     }
     let asr = asr.clone();
     let lang = language.to_string();
-    tokio::task::spawn_blocking(move || transcribe_window(&asr, &mixed, &lang))
+    let text = tokio::task::spawn_blocking(move || transcribe_window(&asr, &mixed, &lang))
         .await
         .ok()
-        .flatten()
+        .flatten()?;
+    Some((text, cluster))
 }
 
 // --- Tauri commands ------------------------------------------------------------------------------
@@ -458,6 +475,46 @@ pub struct MeetingSegmentEvent {
     pub meeting_id: i64,
     pub offset_ms: i64,
     pub text: String,
+    pub speaker_cluster: i64,
+}
+
+/// One speaker in the live meeting, for the `meeting-speakers` event and `get_meeting`.
+#[derive(Clone, serde::Serialize)]
+pub struct SpeakerInfo {
+    pub cluster: i64,
+    pub label: String,
+    pub is_self: bool,
+}
+
+/// Emitted (`meeting-speakers`) whenever the speaker set or any label changes (a new speaker
+/// appears, or a name resolves), so the UI relabels every line of a cluster live and retroactively.
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingSpeakersEvent {
+    pub meeting_id: i64,
+    pub speakers: Vec<SpeakerInfo>,
+}
+
+/// Build the current speaker list from the attributed turns so far: "You" for the mic cluster, a
+/// resolved real name for any guest the conversation has confidently named, else "Speaker N".
+fn compute_speakers(turns: &[crate::diarize::Turn]) -> (Vec<SpeakerInfo>, std::collections::HashMap<i64, String>) {
+    use std::collections::BTreeSet;
+    let resolved = crate::diarize::resolve_speaker_names(turns);
+    let clusters: BTreeSet<i64> = turns.iter().map(|t| t.cluster).collect();
+    let mut out = Vec::new();
+    let mut guest_ord = 0;
+    for c in clusters {
+        if c == crate::diarize::SELF_CLUSTER {
+            out.push(SpeakerInfo { cluster: c, label: "You".to_string(), is_self: true });
+        } else {
+            guest_ord += 1;
+            let label = resolved
+                .get(&c)
+                .cloned()
+                .unwrap_or_else(|| format!("Speaker {guest_ord}"));
+            out.push(SpeakerInfo { cluster: c, label, is_self: false });
+        }
+    }
+    (out, resolved)
 }
 
 /// Emitted (`meeting-finished`) after Stop once the meeting is finalized and (maybe) auto-renamed,
@@ -507,6 +564,7 @@ pub fn derive_title(segment_texts: &[String]) -> Option<String> {
 pub struct MeetingDetail {
     pub meeting: crate::db::MeetingRow,
     pub segments: Vec<crate::db::MeetingSegmentRow>,
+    pub speakers: Vec<crate::db::MeetingSpeakerRow>,
 }
 
 /// Start capturing + transcribing a meeting. System-audio loopback is Windows-only in this MVP.
@@ -589,6 +647,10 @@ pub async fn start_meeting(
         let db = state.db.clone();
         let app_task = app.clone();
         let task = tokio::spawn(async move {
+            // Attributed turns so far, for live name resolution; and the last speaker labels we
+            // emitted, so we only re-upsert/re-emit when something actually changed.
+            let mut turns: Vec<crate::diarize::Turn> = Vec::new();
+            let mut last_labels: Vec<(i64, String)> = Vec::new();
             loop {
                 for _ in 0..(CHUNK_SECS * 10) {
                     if !st.recording.load(Ordering::Relaxed) {
@@ -607,21 +669,56 @@ pub async fn start_meeting(
                     }
                     continue;
                 }
-                if let Some(text) = process_tick(&st, &asr, &language).await {
+                if let Some((text, cluster)) = process_tick(&st, &asr, &language).await {
                     let offset_ms = start_instant.elapsed().as_millis() as i64;
                     {
                         let db = db.lock().await;
-                        if let Err(e) = db.add_meeting_segment(meeting_id, offset_ms, &text).await {
+                        if let Err(e) =
+                            db.add_meeting_segment(meeting_id, offset_ms, &text, cluster).await
+                        {
                             tracing::warn!("Meeting: failed to save segment: {}", e);
                         }
                     }
-                    // Live update for the Notetaker view + panel (events = the fast path).
+                    // Live transcript update (events = the fast path).
                     app_task
                         .emit(
                             "meeting-segment",
-                            MeetingSegmentEvent { meeting_id, offset_ms, text },
+                            MeetingSegmentEvent {
+                                meeting_id,
+                                offset_ms,
+                                text: text.clone(),
+                                speaker_cluster: cluster,
+                            },
                         )
                         .ok();
+
+                    // Speaker intelligence: re-resolve names over everything said so far and, if the
+                    // speaker set or any label changed, persist it and tell the UI to relabel live.
+                    turns.push(crate::diarize::Turn { cluster, text });
+                    let (speakers, resolved) = compute_speakers(&turns);
+                    let sig: Vec<(i64, String)> =
+                        speakers.iter().map(|s| (s.cluster, s.label.clone())).collect();
+                    if sig != last_labels {
+                        {
+                            let db = db.lock().await;
+                            for s in &speakers {
+                                let is_named = resolved.contains_key(&s.cluster);
+                                if let Err(e) = db
+                                    .upsert_speaker(meeting_id, s.cluster, &s.label, s.is_self, is_named)
+                                    .await
+                                {
+                                    tracing::warn!("Meeting: failed to upsert speaker: {}", e);
+                                }
+                            }
+                        }
+                        app_task
+                            .emit(
+                                "meeting-speakers",
+                                MeetingSpeakersEvent { meeting_id, speakers: speakers.clone() },
+                            )
+                            .ok();
+                        last_labels = sig;
+                    }
                 }
                 if !still {
                     break;
@@ -779,7 +876,23 @@ pub async fn get_meeting(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Meeting not found".to_string())?;
     let segments = db.list_meeting_segments(id).await.map_err(|e| e.to_string())?;
-    Ok(MeetingDetail { meeting, segments })
+    let speakers = db.list_speakers(id).await.map_err(|e| e.to_string())?;
+    Ok(MeetingDetail { meeting, segments, speakers })
+}
+
+/// Rename a speaker in a meeting (user edit). Marks it so the naming heuristic never overwrites it,
+/// and relabels every line of that speaker cluster.
+#[command]
+pub async fn rename_speaker(
+    state: State<'_, crate::app_state::AppState>,
+    meeting_id: i64,
+    cluster: i64,
+    label: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.rename_speaker(meeting_id, cluster, &label)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[command]

@@ -76,9 +76,13 @@ const MOCK: Record<string, unknown> = {
   get_meeting: {
     meeting: MOCK_MEETINGS[0],
     segments: [
-      { id: 1, meeting_id: 2, offset_ms: 0, text: 'Okay, let us kick off the design sync. First item is the Notetaker layout.', created_at: NOW },
-      { id: 2, meeting_id: 2, offset_ms: 12_000, text: 'I think the transcript should read top to bottom with timestamps on the left.', created_at: NOW },
-      { id: 3, meeting_id: 2, offset_ms: 31_000, text: 'Agreed. And we keep it local — no cloud summary in this version.', created_at: NOW },
+      { id: 1, meeting_id: 2, offset_ms: 0, text: 'Okay, let us kick off the design sync. First item is the Notetaker layout.', created_at: NOW, speaker_cluster: 0 },
+      { id: 2, meeting_id: 2, offset_ms: 12_000, text: 'I think the transcript should read top to bottom with timestamps on the left.', created_at: NOW, speaker_cluster: 1 },
+      { id: 3, meeting_id: 2, offset_ms: 31_000, text: 'Agreed. And we keep it local — no cloud summary in this version.', created_at: NOW, speaker_cluster: 1 },
+    ],
+    speakers: [
+      { cluster: 0, label: 'You', is_self: 1 },
+      { cluster: 1, label: 'Alex', is_self: 0 },
     ],
   },
   delete_meeting: null,
@@ -86,6 +90,7 @@ const MOCK: Record<string, unknown> = {
   update_meeting_segment: null,
   delete_meeting_segment: null,
   rename_meeting: null,
+  rename_speaker: null,
   summarize_meeting: {
     key_points: [
       'The transcript should read top to bottom with timestamps on the left.',

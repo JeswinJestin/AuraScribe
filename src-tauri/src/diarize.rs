@@ -17,8 +17,9 @@
 //! None of this is copied from any competitor: the channel split, the clustering, and the naming
 //! heuristics are our own, written from the behaviour we want and documented in the design.
 //!
-//! NOTE: this lands as a tested, standalone engine first; the next commit wires it into the live
-//! meeting pipeline (`meeting.rs` + DB + UI), at which point this allow is removed.
+//! NOTE: Layers A (channel attribution) and C (naming) are wired into the live meeting pipeline.
+//! Layer B's [`OnlineClusterer`] is tested and ready but only becomes live once the on-device
+//! speaker-embedding extractor lands, so the module keeps a dead-code allow until then.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

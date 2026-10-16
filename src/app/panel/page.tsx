@@ -15,7 +15,8 @@ import {
   X,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { MeetingSegment, Summary } from '@/lib/ipc'
+import type { MeetingSegment, Summary, Speaker } from '@/lib/ipc'
+import { groupTurns, labelMap, type SpeakerLine } from '@/lib/speakers'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 type Tab = 'notes' | 'transcript' | 'summary'
@@ -48,8 +49,10 @@ export default function PanelPage() {
   const [title, setTitle] = useState('Untitled meeting')
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
+  const [editingSpeaker, setEditingSpeaker] = useState<number | null>(null)
   const [segments, setSegments] = useState<MeetingSegment[]>([])
-  const [live, setLive] = useState<{ offset_ms: number; text: string }[]>([])
+  const [speakers, setSpeakers] = useState<Speaker[]>([])
+  const [live, setLive] = useState<SpeakerLine[]>([])
   const [notes, setNotes] = useState('')
   const [summary, setSummary] = useState<Summary | null>(null)
   const [summarizing, setSummarizing] = useState(false)
@@ -89,6 +92,7 @@ export default function PanelPage() {
     // A new meeting loads fresh: wipe the previous meeting's live lines and summary before the
     // saved segments for this id arrive, so nothing from the last session lingers.
     setLive([])
+    setSpeakers([])
     setSummary(null)
     ipc
       .getMeeting(meetingId)
@@ -96,6 +100,7 @@ export default function PanelPage() {
         setTitle(d.meeting.title)
         setNotes(d.meeting.notes ?? '')
         setSegments(d.segments)
+        setSpeakers(d.speakers ?? [])
       })
       .catch(() => {})
   }, [meetingId])
@@ -108,7 +113,18 @@ export default function PanelPage() {
       .onMeetingSegment((p) => {
         // Drop late events from a meeting that already ended (prevents cross-meeting bleed).
         if (activeMeeting.current != null && p.meeting_id !== activeMeeting.current) return
-        setLive((prev) => [...prev, { offset_ms: p.offset_ms, text: p.text }])
+        setLive((prev) => [
+          ...prev,
+          { offset_ms: p.offset_ms, text: p.text, speaker_cluster: p.speaker_cluster },
+        ])
+      })
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
+    // Live speaker relabelling: a new speaker appeared, or a name resolved mid-meeting.
+    ipc
+      .onMeetingSpeakers((p) => {
+        if (activeMeeting.current != null && p.meeting_id !== activeMeeting.current) return
+        setSpeakers(p.speakers)
       })
       .then((u) => unlistens.push(u))
       .catch(() => {})
@@ -166,6 +182,19 @@ export default function PanelPage() {
     }
   }
 
+  const saveSpeaker = (cluster: number, value: string) => {
+    const label = value.trim()
+    setEditingSpeaker(null)
+    if (!label || meetingId == null) return
+    setSpeakers((prev) => {
+      const next = prev.some((s) => s.cluster === cluster)
+        ? prev.map((s) => (s.cluster === cluster ? { ...s, label } : s))
+        : [...prev, { cluster, label, is_self: cluster === 0 }]
+      return next
+    })
+    ipc.renameSpeaker(meetingId, cluster, label).catch(() => {})
+  }
+
   const togglePause = () => {
     if (paused) {
       setPaused(false)
@@ -188,7 +217,16 @@ export default function PanelPage() {
   }
   const close = () => ipc.panelClose().catch(() => {})
 
-  const allLines = [...segments.map((s) => ({ offset_ms: s.offset_ms, text: s.text })), ...live]
+  const allLines: SpeakerLine[] = [
+    ...segments.map((s) => ({
+      offset_ms: s.offset_ms,
+      text: s.text,
+      speaker_cluster: s.speaker_cluster,
+    })),
+    ...live,
+  ]
+  const turns = groupTurns(allLines, labelMap(speakers))
+  const guestCount = new Set(turns.filter((t) => t.cluster > 0).map((t) => t.cluster)).size
   const wordCount = allLines.reduce((n, l) => n + wordsIn(l.text), 0)
   const readMin = Math.max(1, Math.round(wordCount / 200))
 
@@ -323,27 +361,62 @@ export default function PanelPage() {
         {tab === 'transcript' && (
           <div>
             {allLines.length > 0 && (
-              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border bg-secondary/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+              <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border bg-secondary/60 px-2.5 py-1 text-[11px] text-muted-foreground">
                 <Clock className="h-3 w-3" />
+                {guestCount > 0 && (
+                  <>
+                    <span className="font-medium uppercase tracking-wide">
+                      {guestCount + 1} speakers
+                    </span>
+                    <span className="text-muted-foreground/50">·</span>
+                  </>
+                )}
                 <span className="mono tabular-nums">{fmtClock(elapsed)}</span>
                 <span className="text-muted-foreground/50">·</span>
                 <span className="mono tabular-nums">{wordCount}</span> words
               </div>
             )}
-            <div className="flex flex-col gap-3">
-              {allLines.length === 0 ? (
+            <div className="flex flex-col gap-4">
+              {turns.length === 0 ? (
                 <p className="text-sm leading-relaxed text-muted-foreground">
                   {paused
                     ? 'Paused — transcription stopped. Press Resume to continue.'
                     : 'Listening… transcribed text will appear here as the meeting goes on.'}
                 </p>
               ) : (
-                allLines.map((seg, i) => (
-                  <div key={i} className="flex gap-3">
-                    <span className="mono shrink-0 select-none pt-[3px] text-[11px] tabular-nums text-muted-foreground/60">
-                      {fmtClock(seg.offset_ms)}
-                    </span>
-                    <p className="text-[14px] leading-relaxed">{seg.text}</p>
+                turns.map((turn, ti) => (
+                  <div key={ti}>
+                    {editingSpeaker === turn.cluster ? (
+                      <input
+                        autoFocus
+                        defaultValue={turn.label}
+                        className="input mb-1.5 h-7 w-44 text-[13px] font-semibold"
+                        onBlur={(e) => saveSpeaker(turn.cluster, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveSpeaker(turn.cluster, e.currentTarget.value)
+                          if (e.key === 'Escape') setEditingSpeaker(null)
+                        }}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setEditingSpeaker(turn.cluster)}
+                        className="mb-1.5 text-[13px] font-semibold"
+                        style={{ color: turn.color }}
+                        title="Rename speaker"
+                      >
+                        {turn.label}
+                      </button>
+                    )}
+                    <div className="flex flex-col gap-1.5">
+                      {turn.lines.map((line, li) => (
+                        <p
+                          key={li}
+                          className="rounded-[10px] bg-secondary/50 px-3 py-2 text-[14px] leading-relaxed"
+                        >
+                          {line.text}
+                        </p>
+                      ))}
+                    </div>
                   </div>
                 ))
               )}

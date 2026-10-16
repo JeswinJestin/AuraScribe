@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Circle, Square, Trash2, FileText, Sparkles, Pencil } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { Meeting, MeetingDetail, Summary } from '@/lib/ipc'
+import type { Meeting, MeetingDetail, Summary, Speaker } from '@/lib/ipc'
+import { groupTurns, labelMap, speakerColor, type SpeakerLine } from '@/lib/speakers'
 import { PageHeader, EmptyState, ErrorNote } from '@/components/ui'
 
 /** mm:ss from milliseconds (machine-reported value → monospace at the call site). */
@@ -44,6 +45,46 @@ function groupByDay(meetings: Meeting[]): { label: string; items: Meeting[] }[] 
   return groups
 }
 
+/** A run of consecutive saved segments by one speaker, keeping each segment (so lines stay editable). */
+interface DetailTurn {
+  cluster: number
+  label: string
+  color: string
+  segs: MeetingDetail['segments']
+}
+
+/** Group a meeting's saved segments into speaker turns, resolving each speaker's label + colour. */
+function groupDetailTurns(
+  segments: MeetingDetail['segments'],
+  labels: Map<number, string>
+): DetailTurn[] {
+  const guestOrder = new Map<number, number>()
+  let nextGuest = 0
+  const guestIndexOf = (cluster: number) => {
+    if (cluster <= 0) return -1
+    if (!guestOrder.has(cluster)) guestOrder.set(cluster, nextGuest++)
+    return guestOrder.get(cluster)!
+  }
+  const turns: DetailTurn[] = []
+  for (const seg of segments) {
+    const cluster = seg.speaker_cluster
+    const gi = guestIndexOf(cluster)
+    const last = turns[turns.length - 1]
+    if (last && last.cluster === cluster) {
+      last.segs.push(seg)
+      continue
+    }
+    const fallback = cluster === 0 ? 'You' : cluster < 0 ? 'Speaker' : `Speaker ${gi + 1}`
+    turns.push({
+      cluster,
+      label: labels.get(cluster) ?? fallback,
+      color: speakerColor(cluster, gi),
+      segs: [seg],
+    })
+  }
+  return turns
+}
+
 export function NotetakerView() {
   const [recording, setRecording] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
@@ -56,10 +97,12 @@ export function NotetakerView() {
   const [notesDraft, setNotesDraft] = useState('')
   const [editingSeg, setEditingSeg] = useState<number | null>(null)
   const [segDraft, setSegDraft] = useState('')
+  const [editingSpeaker, setEditingSpeaker] = useState<number | null>(null)
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [live, setLive] = useState<{ offset_ms: number; text: string }[]>([])
+  const [live, setLive] = useState<SpeakerLine[]>([])
+  const [liveSpeakers, setLiveSpeakers] = useState<Speaker[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const liveEndRef = useRef<HTMLDivElement | null>(null)
 
@@ -91,10 +134,17 @@ export function NotetakerView() {
     const unlistens: Array<() => void> = []
     ipc
       .onMeetingSegment((p) => {
-        setLive((prev) => [...prev, { offset_ms: p.offset_ms, text: p.text }])
+        setLive((prev) => [
+          ...prev,
+          { offset_ms: p.offset_ms, text: p.text, speaker_cluster: p.speaker_cluster },
+        ])
       })
       .then((u) => unlistens.push(u))
       .catch(() => {}) // event system unavailable (e.g. preview harness) — polling still works
+    ipc
+      .onMeetingSpeakers((p) => setLiveSpeakers(p.speakers))
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
     ipc
       .onMeetingFinished(() => {
         // Title may have been auto-generated; refresh the list to show it.
@@ -118,6 +168,7 @@ export function NotetakerView() {
     setError(null)
     setBusy(true)
     setLive([])
+    setLiveSpeakers([])
     setSelected(null)
     try {
       await ipc.startMeeting()
@@ -204,6 +255,25 @@ export function NotetakerView() {
     }
   }
 
+  const saveSpeaker = async (cluster: number, value: string) => {
+    setEditingSpeaker(null)
+    const label = value.trim()
+    if (!selected || !label) return
+    const id = selected.meeting.id
+    const has = selected.speakers.some((s) => s.cluster === cluster)
+    setSelected({
+      ...selected,
+      speakers: has
+        ? selected.speakers.map((s) => (s.cluster === cluster ? { ...s, label } : s))
+        : [...selected.speakers, { cluster, label, is_self: cluster === 0 ? 1 : 0 }],
+    })
+    try {
+      await ipc.renameSpeaker(id, cluster, label)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   const summarize = async () => {
     if (!selected) return
     setError(null)
@@ -281,13 +351,25 @@ export function NotetakerView() {
               Listening… transcribed text will appear here as you speak.
             </p>
           ) : (
-            <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
-              {live.map((seg, i) => (
-                <div key={i} className="flex gap-3">
-                  <span className="mono shrink-0 pt-0.5 text-xs text-muted-foreground/70">
-                    {fmtDuration(seg.offset_ms)}
-                  </span>
-                  <p className="text-[13px] leading-relaxed">{seg.text}</p>
+            <div className="flex max-h-72 flex-col gap-3 overflow-y-auto">
+              {groupTurns(live, labelMap(liveSpeakers)).map((turn, ti) => (
+                <div key={ti}>
+                  <div
+                    className="mb-1 text-[12px] font-semibold"
+                    style={{ color: turn.color }}
+                  >
+                    {turn.label}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {turn.lines.map((line, li) => (
+                      <p
+                        key={li}
+                        className="rounded-lg bg-secondary/50 px-2.5 py-1.5 text-[13px] leading-relaxed"
+                      >
+                        {line.text}
+                      </p>
+                    ))}
+                  </div>
                 </div>
               ))}
               <div ref={liveEndRef} />
@@ -457,42 +539,68 @@ export function NotetakerView() {
 
           <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
             Transcript
-            <span className="ml-1.5 font-normal text-muted-foreground/60">· click a line to edit</span>
+            <span className="ml-1.5 font-normal text-muted-foreground/60">
+              · click a line to edit, a name to rename
+            </span>
           </label>
           {selected.segments.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">
               No speech was transcribed for this meeting.
             </p>
           ) : (
-            <div className="flex flex-col gap-2">
-              {selected.segments.map((seg) => (
-                <div key={seg.id} className="flex gap-3">
-                  <span className="mono shrink-0 pt-0.5 text-xs text-muted-foreground/70">
-                    {fmtDuration(seg.offset_ms)}
-                  </span>
-                  {editingSeg === seg.id ? (
-                    <textarea
+            <div className="flex flex-col gap-4">
+              {groupDetailTurns(selected.segments, labelMap(selected.speakers)).map((turn, ti) => (
+                <div key={ti}>
+                  {editingSpeaker === turn.cluster ? (
+                    <input
                       autoFocus
-                      className="input min-h-[52px] flex-1 resize-y text-[13px] leading-relaxed"
-                      value={segDraft}
-                      onChange={(e) => setSegDraft(e.target.value)}
-                      onBlur={() => saveSegment(seg.id)}
+                      defaultValue={turn.label}
+                      className="input mb-1.5 h-7 w-44 text-[13px] font-semibold"
+                      onBlur={(e) => saveSpeaker(turn.cluster, e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Escape') setEditingSeg(null)
+                        if (e.key === 'Enter') saveSpeaker(turn.cluster, e.currentTarget.value)
+                        if (e.key === 'Escape') setEditingSpeaker(null)
                       }}
                     />
                   ) : (
-                    <p
-                      onClick={() => {
-                        setSegDraft(seg.text)
-                        setEditingSeg(seg.id)
-                      }}
-                      className="flex-1 cursor-text rounded px-1 py-0.5 text-[13px] leading-relaxed hover:bg-secondary/50"
-                      title="Click to edit (clear the text to delete this line)"
+                    <button
+                      onClick={() => setEditingSpeaker(turn.cluster)}
+                      className="mb-1.5 text-[13px] font-semibold"
+                      style={{ color: turn.color }}
+                      title="Rename speaker"
                     >
-                      {seg.text}
-                    </p>
+                      {turn.label}
+                    </button>
                   )}
+                  <div className="flex flex-col gap-1.5">
+                    {turn.segs.map((seg) =>
+                      editingSeg === seg.id ? (
+                        <textarea
+                          key={seg.id}
+                          autoFocus
+                          className="input min-h-[52px] resize-y text-[13px] leading-relaxed"
+                          value={segDraft}
+                          onChange={(e) => setSegDraft(e.target.value)}
+                          onBlur={() => saveSegment(seg.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') setEditingSeg(null)
+                          }}
+                        />
+                      ) : (
+                        <p
+                          key={seg.id}
+                          onClick={() => {
+                            setSegDraft(seg.text)
+                            setEditingSeg(seg.id)
+                          }}
+                          className="cursor-text rounded-lg bg-secondary/40 px-2.5 py-1.5 text-[13px] leading-relaxed hover:bg-secondary/70"
+                          title="Click to edit (clear the text to delete this line)"
+                        >
+                          {seg.text}
+                        </p>
+                      )
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

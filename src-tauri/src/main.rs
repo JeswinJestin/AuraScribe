@@ -343,6 +343,7 @@ fn main() {
             meeting::list_meetings,
             meeting::get_meeting,
             meeting::rename_meeting,
+            meeting::rename_speaker,
             meeting::delete_meeting,
             meeting::summarize_meeting,
             meeting::save_meeting_notes,

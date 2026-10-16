@@ -540,15 +540,77 @@ impl Database {
         meeting_id: i64,
         offset_ms: i64,
         text: &str,
-    ) -> Result<(), sqlx::Error> {
+        speaker_cluster: i64,
+    ) -> Result<i64, sqlx::Error> {
         let created_at = chrono::Utc::now().timestamp();
-        sqlx::query(
-            "INSERT INTO meeting_segments (meeting_id, offset_ms, text, created_at) VALUES ($1, $2, $3, $4)",
+        let res = sqlx::query(
+            "INSERT INTO meeting_segments (meeting_id, offset_ms, text, created_at, speaker_cluster)
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(meeting_id)
         .bind(offset_ms)
         .bind(text)
         .bind(created_at)
+        .bind(speaker_cluster)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.last_insert_rowid())
+    }
+
+    /// Insert or update a speaker's display label for a meeting. The heuristic never overwrites a
+    /// label the user has edited (`is_named` set with a user edit); see [`Self::rename_speaker`].
+    pub async fn upsert_speaker(
+        &self,
+        meeting_id: i64,
+        cluster: i64,
+        label: &str,
+        is_self: bool,
+        is_named: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO meeting_speakers (meeting_id, cluster, label, is_self, is_named)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(meeting_id, cluster) DO UPDATE SET
+                 label = excluded.label,
+                 is_named = excluded.is_named
+             WHERE meeting_speakers.is_named = 0",
+        )
+        .bind(meeting_id)
+        .bind(cluster)
+        .bind(label)
+        .bind(is_self as i64)
+        .bind(is_named as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// All speakers for a meeting, in cluster order (You first).
+    pub async fn list_speakers(&self, meeting_id: i64) -> Result<Vec<MeetingSpeakerRow>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingSpeakerRow>(
+            "SELECT meeting_id, cluster, label, is_self, is_named
+             FROM meeting_speakers WHERE meeting_id = $1 ORDER BY cluster ASC",
+        )
+        .bind(meeting_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Rename a speaker (user edit). Marks it `is_named` so the heuristic never overwrites it.
+    pub async fn rename_speaker(
+        &self,
+        meeting_id: i64,
+        cluster: i64,
+        label: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO meeting_speakers (meeting_id, cluster, label, is_self, is_named)
+             VALUES ($1, $2, $3, 0, 1)
+             ON CONFLICT(meeting_id, cluster) DO UPDATE SET label = excluded.label, is_named = 1",
+        )
+        .bind(meeting_id)
+        .bind(cluster)
+        .bind(label)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -658,7 +720,7 @@ impl Database {
         meeting_id: i64,
     ) -> Result<Vec<MeetingSegmentRow>, sqlx::Error> {
         sqlx::query_as::<_, MeetingSegmentRow>(
-            "SELECT id, meeting_id, offset_ms, text, created_at
+            "SELECT id, meeting_id, offset_ms, text, created_at, speaker_cluster
              FROM meeting_segments WHERE meeting_id = $1 ORDER BY offset_ms ASC",
         )
         .bind(meeting_id)
@@ -833,4 +895,17 @@ pub struct MeetingSegmentRow {
     pub offset_ms: i64,
     pub text: String,
     pub created_at: i64,
+    /// Speaker cluster: 0 = You (mic), 1..N = guests, -1 = unknown (pre-speaker-intelligence rows).
+    pub speaker_cluster: i64,
+}
+
+/// One speaker in a meeting: a stable cluster id and its current display label (a generic
+/// "Speaker N", a resolved real name, or a user edit).
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct MeetingSpeakerRow {
+    pub meeting_id: i64,
+    pub cluster: i64,
+    pub label: String,
+    pub is_self: i64,
+    pub is_named: i64,
 }

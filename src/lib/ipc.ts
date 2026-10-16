@@ -363,6 +363,16 @@ export interface MeetingSegment {
   offset_ms: number
   text: string
   created_at: number
+  /** Speaker cluster: 0 = You, 1..N = guests, -1 = unknown (older meetings). */
+  speaker_cluster: number
+}
+
+/** A speaker in a meeting — cluster id + its current display label ("You" / "Speaker 1" / a name). */
+export interface Speaker {
+  cluster: number
+  label: string
+  /** 1 (or true) for the local user. The backend sends a number in getMeeting, a bool in events. */
+  is_self: number | boolean
 }
 
 export interface MeetingStatus {
@@ -375,6 +385,7 @@ export interface MeetingStatus {
 export interface MeetingDetail {
   meeting: Meeting
   segments: MeetingSegment[]
+  speakers: Speaker[]
 }
 
 export async function startMeeting(title?: string): Promise<number> {
@@ -458,12 +469,36 @@ export async function panelClose(): Promise<void> {
 
 /** Fires each time a window is transcribed during capture — for the live transcript. */
 export async function onMeetingSegment(
-  callback: (payload: { meeting_id: number; offset_ms: number; text: string }) => void
+  callback: (payload: {
+    meeting_id: number
+    offset_ms: number
+    text: string
+    speaker_cluster: number
+  }) => void
 ) {
-  return listen<{ meeting_id: number; offset_ms: number; text: string }>(
+  return listen<{ meeting_id: number; offset_ms: number; text: string; speaker_cluster: number }>(
     'meeting-segment',
     (e) => callback(e.payload)
   )
+}
+
+/** Fires whenever the speaker set or any label changes (new speaker, or a name resolves), so the
+ *  UI can relabel every line of a cluster live and retroactively. */
+export async function onMeetingSpeakers(
+  callback: (payload: { meeting_id: number; speakers: Speaker[] }) => void
+) {
+  return listen<{ meeting_id: number; speakers: Speaker[] }>('meeting-speakers', (e) =>
+    callback(e.payload)
+  )
+}
+
+/** Rename a speaker (user edit) — relabels all of that speaker's lines; the heuristic won't undo it. */
+export async function renameSpeaker(
+  meetingId: number,
+  cluster: number,
+  label: string
+): Promise<void> {
+  return invoke('rename_speaker', { meetingId, cluster, label })
 }
 
 /** Fires after Stop once the meeting is finalized and (maybe) auto-renamed. */
