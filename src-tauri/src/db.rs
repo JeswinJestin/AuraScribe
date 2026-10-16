@@ -585,6 +585,39 @@ impl Database {
         Ok(())
     }
 
+    /// Apply a cluster remap (old → new) to a meeting's segments after a self-correction re-cluster,
+    /// so stored lines follow the merged speaker numbering. Done via a temporary offset so an
+    /// old→new that collides with another old id can't clobber it mid-pass.
+    pub async fn remap_segment_clusters(
+        &self,
+        meeting_id: i64,
+        remap: &[(i64, i64)],
+    ) -> Result<(), sqlx::Error> {
+        const OFFSET: i64 = 1_000_000; // guest ids are small; this parks new ids out of the way
+        let mut tx = self.pool.begin().await?;
+        for &(old, new) in remap {
+            sqlx::query(
+                "UPDATE meeting_segments SET speaker_cluster = $1
+                 WHERE meeting_id = $2 AND speaker_cluster = $3",
+            )
+            .bind(new + OFFSET)
+            .bind(meeting_id)
+            .bind(old)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE meeting_segments SET speaker_cluster = speaker_cluster - $1
+             WHERE meeting_id = $2 AND speaker_cluster >= $1",
+        )
+        .bind(OFFSET)
+        .bind(meeting_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// All speakers for a meeting, in cluster order (You first).
     pub async fn list_speakers(&self, meeting_id: i64) -> Result<Vec<MeetingSpeakerRow>, sqlx::Error> {
         sqlx::query_as::<_, MeetingSpeakerRow>(

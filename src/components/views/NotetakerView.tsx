@@ -103,6 +103,8 @@ export function NotetakerView() {
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState<SpeakerLine[]>([])
   const [liveSpeakers, setLiveSpeakers] = useState<Speaker[]>([])
+  const [speakerModel, setSpeakerModel] = useState<{ downloaded: boolean; size_mb: number } | null>(null)
+  const [dlProgress, setDlProgress] = useState<number | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const liveEndRef = useRef<HTMLDivElement | null>(null)
 
@@ -128,6 +130,7 @@ export function NotetakerView() {
   useEffect(() => {
     loadMeetings()
     refreshStatus()
+    ipc.speakerModelStatus().then(setSpeakerModel).catch(() => {})
     pollRef.current = setInterval(refreshStatus, 1000)
 
     // Live transcript: append each segment as it is transcribed during capture.
@@ -143,6 +146,19 @@ export function NotetakerView() {
       .catch(() => {}) // event system unavailable (e.g. preview harness) — polling still works
     ipc
       .onMeetingSpeakers((p) => setLiveSpeakers(p.speakers))
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
+    ipc
+      .onMeetingRemap((p) => {
+        const m = new Map(p.remap)
+        setLive((prev) =>
+          prev.map((l) => ({ ...l, speaker_cluster: m.get(l.speaker_cluster) ?? l.speaker_cluster }))
+        )
+      })
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
+    ipc
+      .onSpeakerModelProgress((p) => setDlProgress(p))
       .then((u) => unlistens.push(u))
       .catch(() => {})
     ipc
@@ -163,6 +179,19 @@ export function NotetakerView() {
   useEffect(() => {
     liveEndRef.current?.scrollIntoView({ block: 'end' })
   }, [live])
+
+  const enableSpeakerSeparation = async () => {
+    setError(null)
+    setDlProgress(0)
+    try {
+      await ipc.downloadSpeakerModel()
+      setSpeakerModel((s) => (s ? { ...s, downloaded: true } : s))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setDlProgress(null)
+    }
+  }
 
   const start = async () => {
     setError(null)
@@ -338,6 +367,28 @@ export function NotetakerView() {
           accurately than short dictation — this is a local model, not a cloud service.
         </p>
       </div>
+
+      {/* Speaker separation — opt-in local model that splits guests into Speaker 1/2/3. */}
+      {speakerModel && !speakerModel.downloaded && (
+        <div className="mb-3.5 flex items-center justify-between gap-3 rounded-[14px] border bg-card p-[18px]">
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium">Separate speakers</h3>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+              Tell guests apart as Speaker 1 / 2 / 3 and auto-detect names. One-time{' '}
+              {speakerModel.size_mb} MB download — runs entirely on your device, no cloud.
+            </p>
+          </div>
+          {dlProgress == null ? (
+            <button onClick={enableSpeakerSeparation} className="btn-secondary btn-sm shrink-0">
+              Enable
+            </button>
+          ) : (
+            <span className="mono shrink-0 text-xs text-muted-foreground">
+              {Math.round(dlProgress * 100)}%
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Live transcript — grows as the meeting is transcribed (every few seconds). */}
       {recording && (

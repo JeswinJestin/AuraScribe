@@ -91,6 +91,8 @@ const MOCK: Record<string, unknown> = {
   delete_meeting_segment: null,
   rename_meeting: null,
   rename_speaker: null,
+  speaker_model_status: { downloaded: false, size_mb: 40 },
+  download_speaker_model: null,
   summarize_meeting: {
     key_points: [
       'The transcript should read top to bottom with timestamps on the left.',

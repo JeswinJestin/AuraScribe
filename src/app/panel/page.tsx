@@ -128,6 +128,16 @@ export default function PanelPage() {
       })
       .then((u) => unlistens.push(u))
       .catch(() => {})
+    ipc
+      .onMeetingRemap((p) => {
+        if (activeMeeting.current != null && p.meeting_id !== activeMeeting.current) return
+        const m = new Map(p.remap)
+        setLive((prev) =>
+          prev.map((l) => ({ ...l, speaker_cluster: m.get(l.speaker_cluster) ?? l.speaker_cluster }))
+        )
+      })
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
     // notetaker_ready returns the user's theme — apply it reliably (the in-panel settings fetch
     // was racing/failing, which left the panel stuck on the light surface).
     ipc

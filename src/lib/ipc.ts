@@ -501,6 +501,35 @@ export async function renameSpeaker(
   return invoke('rename_speaker', { meetingId, cluster, label })
 }
 
+/** Fires after a self-correction re-cluster merges guests, so the UI can remap live line clusters. */
+export async function onMeetingRemap(
+  callback: (payload: { meeting_id: number; remap: [number, number][] }) => void
+) {
+  return listen<{ meeting_id: number; remap: [number, number][] }>('meeting-remap', (e) =>
+    callback(e.payload)
+  )
+}
+
+export interface SpeakerModelStatus {
+  downloaded: boolean
+  size_mb: number
+}
+
+/** Whether the optional speaker-separation model (splits guests into Speaker 1/2/3) is downloaded. */
+export async function speakerModelStatus(): Promise<SpeakerModelStatus> {
+  return invoke<SpeakerModelStatus>('speaker_model_status')
+}
+
+/** Download the opt-in speaker-separation model (~40 MB, on-device). Progress via onSpeakerModelProgress. */
+export async function downloadSpeakerModel(): Promise<void> {
+  return invoke('download_speaker_model')
+}
+
+/** Progress (0..1) of the speaker-separation model download. */
+export async function onSpeakerModelProgress(callback: (progress: number) => void) {
+  return listen<number>('speaker-model-progress', (e) => callback(e.payload))
+}
+
 /** Fires after Stop once the meeting is finalized and (maybe) auto-renamed. */
 export async function onMeetingFinished(
   callback: (payload: { meeting_id: number; title: string }) => void

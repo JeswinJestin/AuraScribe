@@ -9,6 +9,7 @@ mod commands;
 mod db;
 mod denoise;
 mod diarize;
+mod embedding;
 mod engine;
 mod expand;
 mod hotkey;
@@ -344,6 +345,8 @@ fn main() {
             meeting::get_meeting,
             meeting::rename_meeting,
             meeting::rename_speaker,
+            meeting::speaker_model_status,
+            meeting::download_speaker_model,
             meeting::delete_meeting,
             meeting::summarize_meeting,
             meeting::save_meeting_notes,

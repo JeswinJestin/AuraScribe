@@ -410,14 +410,22 @@ fn transcribe_window(asr: &crate::engine::Asr, samples: &[f32], language: &str) 
     }
 }
 
+/// Result of one chunker tick: the transcribed text, which channel carried the window (Layer A),
+/// and the 16 kHz guest audio (for Layer B's voice fingerprint, computed in the caller where the
+/// embedder lives).
+struct Tick {
+    text: String,
+    channel: crate::diarize::Channel,
+    guest16: Vec<f32>,
+}
+
 /// One drain-and-transcribe tick: take everything captured so far from both sources, resample,
-/// attribute the window to a speaker from the two channels' energy, mix, transcribe, and return
-/// the text plus which speaker cluster it belongs to (0 = You, 1 = a guest).
+/// attribute the window to a channel from the two streams' energy, mix, and transcribe.
 async fn process_tick(
     st: &MeetingState,
     asr: &Arc<crate::engine::Asr>,
     language: &str,
-) -> Option<(String, i64)> {
+) -> Option<Tick> {
     let (sys, sys_rate, mic, mic_rate) = {
         let mut sb = st.system_buf.lock().await;
         let mut mb = st.mic_buf.lock().await;
@@ -430,16 +438,11 @@ async fn process_tick(
     }
     let sys16 = to_asr_rate(&sys, sys_rate);
     let mic16 = to_asr_rate(&mic, mic_rate);
-    // Layer A: which channel carries this window decides the speaker. "You" when the mic dominates;
-    // otherwise a guest. (Guests are a single cluster until the embedding model splits them.)
+    // Layer A: which channel carries this window. "You" when the mic dominates; otherwise a guest.
     let channel = crate::diarize::attribute_channel(
         crate::diarize::rms(&mic16),
         crate::diarize::rms(&sys16),
     );
-    let cluster = match channel {
-        crate::diarize::Channel::Self_ => crate::diarize::SELF_CLUSTER,
-        _ => crate::diarize::SELF_CLUSTER + 1,
-    };
     // Transcribe the full mixed window (so no words are lost regardless of who spoke).
     let mixed = mix_streams(&sys16, &mic16);
     if mixed.is_empty() {
@@ -451,7 +454,7 @@ async fn process_tick(
         .await
         .ok()
         .flatten()?;
-    Some((text, cluster))
+    Some(Tick { text, channel, guest16: sys16 })
 }
 
 // --- Tauri commands ------------------------------------------------------------------------------
@@ -493,6 +496,22 @@ pub struct MeetingSpeakersEvent {
     pub meeting_id: i64,
     pub speakers: Vec<SpeakerInfo>,
 }
+
+/// Emitted (`meeting-remap`) after a self-correction re-cluster merges/renumbers guest speakers, so
+/// the UI can rewrite its live lines' cluster ids to match (old cluster id → new cluster id pairs).
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingRemapEvent {
+    pub meeting_id: i64,
+    pub remap: Vec<(i64, i64)>,
+}
+
+// Layer B tuning (cosine on L2-normalized TitaNet embeddings). Defaults from common practice;
+// tune on-device. JOIN: min similarity to attach to an existing guest rather than open a new one.
+const JOIN_THRESHOLD: f32 = 0.55;
+// MERGE: the self-correction re-cluster fuses guest clusters at least this similar.
+const MERGE_THRESHOLD: f32 = 0.62;
+// Re-cluster every this-many ticks (~CHUNK_SECS each) to fix drift mid-meeting.
+const RECLUSTER_EVERY: u32 = 5;
 
 /// Build the current speaker list from the attributed turns so far: "You" for the mic cluster, a
 /// resolved real name for any guest the conversation has confidently named, else "Speaker N".
@@ -646,11 +665,39 @@ pub async fn start_meeting(
         let asr = state.asr.clone();
         let db = state.db.clone();
         let app_task = app.clone();
+
+        // Layer B: if the speaker-embedding model is downloaded, load it so guests get split into
+        // Speaker 1/2/3. Otherwise leave it off (guests stay one cluster) — an opt-in, no-cloud add.
+        let embedder: Option<crate::embedding::SpeakerEmbedder> =
+            if crate::embedding::is_downloaded(asr.models_dir()) {
+                match crate::embedding::SpeakerEmbedder::load(asr.models_dir()) {
+                    Ok(e) => {
+                        tracing::info!("Speaker separation ON (embedding model loaded)");
+                        Some(e)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Speaker model present but failed to load: {e}");
+                        None
+                    }
+                }
+            } else {
+                tracing::info!("Speaker separation OFF (no embedding model); guests shown as one");
+                None
+            };
+        let embedder = Arc::new(std::sync::Mutex::new(embedder));
+
         let task = tokio::spawn(async move {
             // Attributed turns so far, for live name resolution; and the last speaker labels we
             // emitted, so we only re-upsert/re-emit when something actually changed.
             let mut turns: Vec<crate::diarize::Turn> = Vec::new();
             let mut last_labels: Vec<(i64, String)> = Vec::new();
+            // Layer B: online clusterer for guest voices, active only when the embedder loaded.
+            let mut clusterer = if embedder.lock().map(|g| g.is_some()).unwrap_or(false) {
+                Some(crate::diarize::OnlineClusterer::new(JOIN_THRESHOLD))
+            } else {
+                None
+            };
+            let mut ticks: u32 = 0;
             loop {
                 for _ in 0..(CHUNK_SECS * 10) {
                     if !st.recording.load(Ordering::Relaxed) {
@@ -669,7 +716,35 @@ pub async fn start_meeting(
                     }
                     continue;
                 }
-                if let Some((text, cluster)) = process_tick(&st, &asr, &language).await {
+                if let Some(tick) = process_tick(&st, &asr, &language).await {
+                    let text = tick.text;
+                    // Layer A + B: "You" from the channel split; for a guest, fingerprint the window
+                    // and let the online clusterer say which guest (Speaker 1/2/3). Falls back to a
+                    // single guest cluster when the embedder isn't loaded or the window won't embed.
+                    let cluster = match tick.channel {
+                        crate::diarize::Channel::Self_ => crate::diarize::SELF_CLUSTER,
+                        _ => {
+                            let mut assigned = crate::diarize::SELF_CLUSTER + 1;
+                            if let Some(clust) = clusterer.as_mut() {
+                                let emb_arc = embedder.clone();
+                                let audio = tick.guest16;
+                                let emb = tokio::task::spawn_blocking(move || {
+                                    emb_arc
+                                        .lock()
+                                        .ok()
+                                        .and_then(|mut g| g.as_mut().and_then(|e| e.compute(&audio)))
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(v) = emb {
+                                    assigned = clust.assign(&v);
+                                }
+                            }
+                            assigned
+                        }
+                    };
+                    ticks += 1;
                     let offset_ms = start_instant.elapsed().as_millis() as i64;
                     {
                         let db = db.lock().await;
@@ -695,6 +770,36 @@ pub async fn start_meeting(
                     // Speaker intelligence: re-resolve names over everything said so far and, if the
                     // speaker set or any label changed, persist it and tell the UI to relabel live.
                     turns.push(crate::diarize::Turn { cluster, text });
+
+                    // Layer B self-correction: every so often, re-cluster the guest fingerprints to
+                    // fix drift (merge an over-split voice). Remap the stored + in-memory + live
+                    // cluster ids so the whole transcript stays consistent.
+                    if let Some(clust) = clusterer.as_mut() {
+                        if ticks % RECLUSTER_EVERY == 0 {
+                            let remap = clust.recluster(MERGE_THRESHOLD);
+                            let changed: Vec<(i64, i64)> =
+                                remap.iter().filter(|(o, n)| o != n).map(|(&o, &n)| (o, n)).collect();
+                            if !changed.is_empty() {
+                                for t in turns.iter_mut() {
+                                    if let Some(&(_, n)) = changed.iter().find(|(o, _)| *o == t.cluster) {
+                                        t.cluster = n;
+                                    }
+                                }
+                                {
+                                    let db = db.lock().await;
+                                    let _ = db.remap_segment_clusters(meeting_id, &changed).await;
+                                }
+                                app_task
+                                    .emit(
+                                        "meeting-remap",
+                                        MeetingRemapEvent { meeting_id, remap: changed },
+                                    )
+                                    .ok();
+                                last_labels.clear(); // force a fresh speaker re-emit below
+                            }
+                        }
+                    }
+
                     let (speakers, resolved) = compute_speakers(&turns);
                     let sig: Vec<(i64, String)> =
                         speakers.iter().map(|s| (s.cluster, s.label.clone())).collect();
@@ -893,6 +998,41 @@ pub async fn rename_speaker(
     db.rename_speaker(meeting_id, cluster, &label)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Whether the optional speaker-separation (voice-embedding) model is downloaded, and its size.
+#[derive(serde::Serialize)]
+pub struct SpeakerModelStatus {
+    pub downloaded: bool,
+    pub size_mb: u64,
+}
+
+#[command]
+pub async fn speaker_model_status(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<SpeakerModelStatus, String> {
+    Ok(SpeakerModelStatus {
+        downloaded: crate::embedding::is_downloaded(state.asr.models_dir()),
+        size_mb: crate::embedding::MODEL_SIZE_BYTES / 1_000_000,
+    })
+}
+
+/// Download the speaker-separation model (opt-in, ~40 MB, on-device). Emits `speaker-model-progress`
+/// {progress: 0..1} so the UI can show a bar. This is the only network use the Notetaker ever makes
+/// beyond the ASR model download, and it is never automatic.
+#[command]
+pub async fn download_speaker_model(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dir = state.asr.models_dir().to_path_buf();
+    let app2 = app.clone();
+    crate::embedding::download(&dir, move |p| {
+        app2.emit("speaker-model-progress", p).ok();
+    })
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 #[command]
