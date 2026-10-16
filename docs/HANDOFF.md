@@ -6,7 +6,21 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-10-14 (**Notetaker Phase 2 — on-device VERIFIED + real-time transcript** —
+**Last updated:** 2026-10-16 (**Notetaker panel window chrome + premium list redesign** — the
+floating panel now has real window chrome top-right: **Expand** (⤢) grows it to a large centered
+reading window, **restore** (the "small window" icon) docks it back to its default full-height
+right-edge size, **Minimize**, and **Close** (hides the panel and brings the main app window back —
+the meeting keeps recording, controllable again from the in-app Notetaker view). New Rust commands
+`panel_dock` / `panel_expand` / `panel_close` in `panel.rs` do the monitor-aware sizing (expand =
+~72%×92% of the work area, centered; restore reuses the existing dock `position()`); expanded view
+constrains text to a 720px column so lines stay readable. The **in-app Notetaker list** was
+redesigned Wispr-style: meetings are now **grouped by day** ("Today" / "Yesterday" / "Tue, Oct 13")
+with clean rows — a rounded icon tile, title, and a muted `time · duration · words` subline — with
+theme-robust **hover** (`bg-muted/70`) and **selected** (`bg-muted` + inset `primary/0.35` ring)
+states and a delete action that reveals on hover. `tsc` clean, `cargo check` clean, both verified in
+`/preview` (panel chrome + date-grouped list, dark; selected ring confirmed). On PR #5; the v2.1.0
+release draft stays **held** pending the owner's on-device sign-off. **Prior (2026-10-14):**
+**Notetaker Phase 2 — on-device VERIFIED + real-time transcript** —
 the owner ran a real capture and `aurascribe.log` confirms **both paths work**: mic `format=F32,
 48000Hz, 1ch` and **WASAPI system loopback `48000Hz, 2ch, 32bit, float=true`** — the previously
 unverified COM audio path is proven on hardware, and Test A (Notepad paste-first fix) works perfectly.

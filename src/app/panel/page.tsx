@@ -1,7 +1,19 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Square, Pencil, Sparkles, Minus, Pause, Play, Clock, Lightbulb } from 'lucide-react'
+import {
+  Square,
+  Pencil,
+  Sparkles,
+  Minus,
+  Pause,
+  Play,
+  Clock,
+  Lightbulb,
+  Maximize2,
+  Minimize2,
+  X,
+} from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { MeetingSegment, Summary } from '@/lib/ipc'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -28,6 +40,7 @@ function wordsIn(text: string): number {
 export default function PanelPage() {
   const [tab, setTab] = useState<Tab>('transcript')
   const [isGlass, setIsGlass] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [meetingId, setMeetingId] = useState<number | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [recording, setRecording] = useState(false)
@@ -102,6 +115,14 @@ export default function PanelPage() {
     if (tab === 'transcript') liveEndRef.current?.scrollIntoView({ block: 'end' })
   }, [live, tab])
 
+  // Each fresh meeting re-docks the window on the Rust side (panel::show → position); keep the
+  // expand/restore toggle in sync so its icon doesn't claim "expanded" after a restart.
+  const wasRecording = useRef(false)
+  useEffect(() => {
+    if (recording && !wasRecording.current) setExpanded(false)
+    wasRecording.current = recording
+  }, [recording])
+
   const onNotesChange = (value: string) => {
     setNotes(value)
     if (meetingId == null) return
@@ -143,6 +164,16 @@ export default function PanelPage() {
   }
   const stop = () => ipc.stopMeeting().catch(() => {})
   const minimize = () => getCurrentWindow().minimize().catch(() => {})
+  const toggleExpand = () => {
+    if (expanded) {
+      setExpanded(false)
+      ipc.panelDock().catch(() => {})
+    } else {
+      setExpanded(true)
+      ipc.panelExpand().catch(() => {})
+    }
+  }
+  const close = () => ipc.panelClose().catch(() => {})
 
   const allLines = [...segments.map((s) => ({ offset_ms: s.offset_ms, text: s.text })), ...live]
   const wordCount = allLines.reduce((n, l) => n + wordsIn(l.text), 0)
@@ -161,13 +192,17 @@ export default function PanelPage() {
       }
     : { background: 'hsl(var(--card))' }
 
+  // Expanded is a large centered window — keep text at a readable measure instead of letting lines
+  // run the full width. Docked stays edge-to-edge in its narrow column.
+  const col = expanded ? 'mx-auto w-full max-w-[720px]' : ''
+
   return (
     <div
       className="flex h-screen w-screen flex-col overflow-hidden rounded-[16px] border text-foreground shadow-2xl"
       style={surface}
     >
       {/* Header (draggable) */}
-      <div data-tauri-drag-region className="shrink-0 px-5 pb-3 pt-4">
+      <div data-tauri-drag-region className={`shrink-0 px-5 pb-3 pt-4 ${col}`}>
         <div className="mb-2 flex items-center gap-2">
           <span
             className={`h-2.5 w-2.5 shrink-0 rounded-full ${
@@ -181,13 +216,33 @@ export default function PanelPage() {
           <span className="mono ml-auto text-[12px] tabular-nums text-muted-foreground">
             {fmtClock(elapsed)}
           </span>
-          <button
-            onClick={minimize}
-            className="btn-ghost -mr-1.5 shrink-0 rounded-md px-1.5 py-1"
-            aria-label="Minimize"
-          >
-            <Minus className="h-4 w-4" />
-          </button>
+          {/* Window chrome: expand ⇄ restore-to-side, minimize, close. */}
+          <div className="-mr-1.5 flex shrink-0 items-center gap-0.5">
+            <button
+              onClick={toggleExpand}
+              className="btn-ghost rounded-md p-1.5 text-muted-foreground hover:text-foreground"
+              aria-label={expanded ? 'Dock to side' : 'Expand'}
+              title={expanded ? 'Dock to the side' : 'Expand'}
+            >
+              {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+            <button
+              onClick={minimize}
+              className="btn-ghost rounded-md p-1.5 text-muted-foreground hover:text-foreground"
+              aria-label="Minimize"
+              title="Minimize"
+            >
+              <Minus className="h-4 w-4" />
+            </button>
+            <button
+              onClick={close}
+              className="btn-ghost rounded-md p-1.5 text-muted-foreground hover:bg-[hsl(var(--record)/0.14)] hover:text-[hsl(var(--record))]"
+              aria-label="Close panel"
+              title="Close (keeps recording in the app)"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         {editingTitle ? (
           <input
@@ -219,7 +274,7 @@ export default function PanelPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex shrink-0 gap-6 border-b px-5">
+      <div className={`flex shrink-0 gap-6 border-b px-5 ${col}`}>
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -236,7 +291,8 @@ export default function PanelPage() {
       </div>
 
       {/* Content (fills) */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className={`min-h-0 flex-1 overflow-y-auto px-5 py-4 ${expanded ? 'w-full' : ''}`}>
+        <div className={col}>
         {tab === 'notes' && (
           <div className="flex h-full flex-col">
             <textarea
@@ -339,10 +395,11 @@ export default function PanelPage() {
             )}
           </div>
         )}
+        </div>
       </div>
 
       {/* Bottom action bar */}
-      <div className="flex shrink-0 items-center gap-2.5 border-t px-5 py-3.5">
+      <div className={`flex shrink-0 items-center gap-2.5 border-t px-5 py-3.5 ${col}`}>
         <button
           onClick={togglePause}
           disabled={!recording}

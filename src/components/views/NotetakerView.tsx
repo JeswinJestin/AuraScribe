@@ -14,13 +14,34 @@ function fmtDuration(ms: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function fmtDate(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
+/** Time of day, e.g. "4:15 PM" — the per-row timestamp (Wispr-style list). */
+function fmtTime(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleTimeString(undefined, {
     hour: 'numeric',
     minute: '2-digit',
   })
+}
+
+/** Section label for a meeting's day: "Today" / "Yesterday" / "Tue, Oct 13". */
+function dayLabel(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000)
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diffDays = Math.round((startOf(new Date()) - startOf(d)) / 86_400_000)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+/** Group an already-sorted (newest-first) meeting list into consecutive day sections. */
+function groupByDay(meetings: Meeting[]): { label: string; items: Meeting[] }[] {
+  const groups: { label: string; items: Meeting[] }[] = []
+  for (const m of meetings) {
+    const label = dayLabel(m.started_at)
+    const last = groups[groups.length - 1]
+    if (last && last.label === label) last.items.push(m)
+    else groups.push({ label, items: [m] })
+  }
+  return groups
 }
 
 export function NotetakerView() {
@@ -281,31 +302,64 @@ export function NotetakerView() {
         </div>
       )}
 
-      {/* Past meetings */}
+      {/* Past meetings — grouped by day, newest first (the Notetaker library). */}
       {meetings.length === 0 ? (
         <EmptyState
           title="No meetings yet"
           hint="Press Start recording before (or during) a call to capture a local transcript."
         />
       ) : (
-        <div className="flex flex-col gap-1.5">
-          {meetings.map((m) => (
-            <div key={m.id} className="panel flex items-center gap-3 px-3 py-2">
-              <button onClick={() => open(m.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="truncate text-sm">{m.title}</span>
-                <span className="mono ml-auto shrink-0 text-xs text-muted-foreground">
-                  {fmtDate(m.started_at)} · {fmtDuration(m.duration_ms)} · {m.word_count}w
-                </span>
-              </button>
-              <button
-                onClick={() => remove(m.id)}
-                className="btn-ghost btn-sm shrink-0"
-                aria-label={`Delete ${m.title}`}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
+        <div className="flex flex-col gap-6">
+          {groupByDay(meetings).map((group) => (
+            <section key={group.label}>
+              <h3 className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                {group.label}
+              </h3>
+              <div className="flex flex-col">
+                {group.items.map((m) => {
+                  const isOpen = selected?.meeting.id === m.id
+                  return (
+                    <div
+                      key={m.id}
+                      className={`group/row flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors ${
+                        isOpen
+                          ? 'bg-muted ring-1 ring-inset ring-[hsl(var(--primary)/0.35)]'
+                          : 'hover:bg-muted/70'
+                      }`}
+                    >
+                      <button
+                        onClick={() => open(m.id)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      >
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground">
+                          <FileText className="h-[18px] w-[18px]" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[14px] font-medium leading-tight text-foreground">
+                            {m.title}
+                          </span>
+                          <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+                            <span className="mono tabular-nums">{fmtTime(m.started_at)}</span>
+                            <span className="text-muted-foreground/40"> · </span>
+                            <span className="mono tabular-nums">{fmtDuration(m.duration_ms)}</span>
+                            <span className="text-muted-foreground/40"> · </span>
+                            <span className="mono tabular-nums">{m.word_count}</span> words
+                          </span>
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => remove(m.id)}
+                        className="btn-ghost btn-sm shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100"
+                        aria-label={`Delete ${m.title}`}
+                        title="Delete meeting"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
           ))}
         </div>
       )}

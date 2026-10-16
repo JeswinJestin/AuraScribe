@@ -441,6 +441,21 @@ export async function resumeMeeting(): Promise<void> {
   return invoke('resume_meeting')
 }
 
+/** Restore the floating panel to its default size docked on the right edge ("small window"). */
+export async function panelDock(): Promise<void> {
+  return invoke('panel_dock')
+}
+
+/** Expand the floating panel to a large, centered reading window. */
+export async function panelExpand(): Promise<void> {
+  return invoke('panel_expand')
+}
+
+/** Close the floating panel and bring the main window back (the meeting keeps recording). */
+export async function panelClose(): Promise<void> {
+  return invoke('panel_close')
+}
+
 /** Fires each time a window is transcribed during capture — for the live transcript. */
 export async function onMeetingSegment(
   callback: (payload: { meeting_id: number; offset_ms: number; text: string }) => void

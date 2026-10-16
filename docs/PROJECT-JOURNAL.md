@@ -631,3 +631,38 @@ menu of local accuracy ideas (contextual biasing/hotwords from the user's Dictio
 vocabulary, Silero VAD endpointing, a punctuation-restoration model, speaker diarization, streaming
 partial results) as the real levers for "more accurate dictation, fewer errors." Nothing committed to
 master; work is on branch `feat/notetaker-mvp-and-notepad-fix`.
+
+### 2026-10-16 — Notetaker floating-panel window chrome + Wispr-grade list redesign
+
+**Panel window controls.** The floating Notetaker panel now behaves like a real window instead of a
+fixed slab. Top-right chrome: **Expand** (⤢) grows it to a large centered reading window; the
+**restore / "small window"** icon docks it straight back to its default full-height, right-edge size;
+**Minimize**; and **Close**, which hides the panel and brings the main app window back — the meeting
+keeps recording and is controllable again from the in-app Notetaker view, so Close never strands the
+user (matches Wispr's return-to-app behaviour). Three new monitor-aware Rust commands in `panel.rs` do
+the sizing — `panel_expand` (~72%×92% of the work area, centered, drops always-on-top so it reads as a
+focused surface), `panel_dock` (reuses the existing dock `position()` and re-pins always-on-top), and
+`panel_close`. The page keeps an `expanded` toggle in sync (reset on each fresh meeting, since
+`panel::show` always re-docks) and, when expanded, constrains every section to a 720px column so lines
+stay at a readable measure instead of running the full monitor width.
+
+**In-app Notetaker list, redesigned.** The past-meetings list was a flat stack of `.panel` rows with a
+cramped mono metadata string. It's now grouped by day — "Today" / "Yesterday" / "Tue, Oct 13" section
+headers — with clean rows: a rounded icon tile, the title, and a muted `time · duration · words`
+subline. First cut used `bg-secondary` for hover/selected, which is near-white in the light theme
+(`--secondary` is 96% L) so the states were nearly invisible there; switched to `bg-muted` (real
+contrast against the card in both themes) with an inset `primary/0.35` ring for the selected row, and a
+delete action that reveals on hover. This follows the impeccable skill's Operate guidance (earned
+familiarity, consistent vocabulary, theme the states) and the craft floor's "theme what the browser
+would leave default."
+
+Scope was UI only — no capture/transcription/summary changes, no cloud. `tsc` clean, `cargo check`
+clean (only the pre-existing `optimize.rs` dead-code warnings), both verified in `/preview`. On branch
+`feat/notetaker-mvp-and-notepad-fix` / PR #5. The v2.1.0 release draft stays **held** until the owner
+signs off on-device (the window resize paths only exercise in the real Tauri app).
+
+Note: `docs/DESIGN.md` still describes the original "instrument" direction and explicitly rules out a
+Wispr-like look, glass, and a serif display face — all of which the Notetaker work has deliberately
+adopted over this arc at the owner's repeated direction. DESIGN.md is now stale against what ships and
+should be reconciled in a dedicated pass (`/impeccable document` or a manual rewrite), not silently as
+a side effect of feature work.

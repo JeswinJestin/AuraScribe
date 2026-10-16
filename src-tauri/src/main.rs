@@ -350,6 +350,9 @@ fn main() {
             meeting::notetaker_ready,
             meeting::pause_meeting,
             meeting::resume_meeting,
+            panel::panel_dock,
+            panel::panel_expand,
+            panel::panel_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -72,6 +72,41 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
+/// Dock the panel back to its default size on the right edge — the "small window" / restore action.
+/// Exposed to the panel page so the window chrome can return from an expanded view.
+#[tauri::command]
+pub fn panel_dock(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(PANEL_LABEL) {
+        position(&window);
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_focus();
+    }
+}
+
+/// Expand the panel to a large, centered reading window (still a single companion window, not the
+/// full app). The restore/"small window" control calls `panel_dock` to come back to the side.
+#[tauri::command]
+pub fn panel_expand(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(PANEL_LABEL) {
+        expand(&window);
+        // Expanded is a focused reading surface, not a nag — let it sit behind if the user clicks away.
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_focus();
+    }
+}
+
+/// Close the panel: hide it and bring the main app window back so the user is never stranded (the
+/// meeting keeps recording — it's controllable again from the in-app Notetaker view).
+#[tauri::command]
+pub fn panel_close(app: AppHandle) {
+    hide(&app);
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
 /// Dock the panel to the **right edge, near full height** of the monitor it is currently on — the
 /// Wispr-style companion panel. Sizes the window to the monitor height (clear of the taskbar) and a
 /// fixed width, then positions it flush to the right with a small gap.
@@ -98,4 +133,24 @@ fn position(window: &tauri::WebviewWindow) {
         return;
     }
     let _ = window.set_position(PhysicalPosition::new(160, 120));
+}
+
+/// Size the panel to a large, centered reading window (~72% wide, ~92% tall of the monitor work
+/// area). Used by the "expand" chrome control; `position` is its "restore to the side" counterpart.
+fn expand(window: &tauri::WebviewWindow) {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(m) = monitor {
+        // work_area() is the screen minus the taskbar, in physical px — keep expanded clear of it.
+        let area = m.work_area();
+        let w = ((area.size.width as f64 * 0.72).round() as u32).max(640);
+        let h = ((area.size.height as f64 * 0.92).round() as u32).max(480);
+        let _ = window.set_size(PhysicalSize::new(w, h));
+        let x = area.position.x + (area.size.width as i32 - w as i32) / 2;
+        let y = area.position.y + (area.size.height as i32 - h as i32) / 2;
+        let _ = window.set_position(PhysicalPosition::new(x.max(area.position.x), y.max(area.position.y)));
+    }
 }
