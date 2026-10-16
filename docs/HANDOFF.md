@@ -6,7 +6,19 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-10-16 (**Notetaker speaker intelligence — live speaker labels + names
+**Last updated:** 2026-10-16 (**v2.2.0 release cut — Notetaker + speaker intelligence shipped**.
+Version bumped 2.1.0→**2.2.0** across the four synced files (package.json, Cargo.toml, Cargo.lock,
+tauri.conf.json). README updated (badge, a "New in v2.2.0 — Notetaker" callout, a Notetaker feature
+bullet, 2.2.0 asset names); **`docs/RELEASE-NOTES-v2.2.0.md`** written. Owner chose: version **2.2.0**,
+**publish as Latest**, **merge PR #5 to master**, **defer prompt-optimization** to its own effort
+(plan at `docs/superpowers/plans/2026-10-16-prompt-optimization-make-it-work.md`). The stale v2.1.0
+tag + draft release (cut at the old panel-only commit) are superseded by 2.2.0. Release mechanism:
+`release.yml` builds Windows/macOS/Linux with `--features moonshine` on a tag push and creates a draft;
+publish as Latest once CI is green. **Prompt optimization is NOT working** today (it echoes input; the
+`prompt` feature is off in the shipped build) — PR #3 has the real llama-cpp-2 code but is
+conflicting + never compile-verified; see the plan. Also this session: the in-app **meeting detail now
+opens as a full page** (back button, big serif title) instead of inline under the list — the Wispr-like
+scalable layout the owner asked for. **Prior same-day — Notetaker speaker intelligence — live speaker labels + names
 (Layers A + C), plus the panel chrome/list work below**. The Notetaker now understands *who* is
 speaking and names them, **mid-meeting**, more capably than Wispr. Design:
 `docs/superpowers/specs/2026-10-16-notetaker-speaker-intelligence-design.md`. **What shipped this

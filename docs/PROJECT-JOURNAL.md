@@ -780,3 +780,30 @@ Net: all four layers (A You/guest, B guest split, C names, D streaming) plus Res
 unverifiable-in-sandbox pieces (B embedding, D streaming) now each proven by running against real
 models/audio. Remaining is on-device accuracy/latency tuning and an optional punctuation/casing pass on
 streaming output. tsc clean; 120 tests + 3 ignored (notepad E2E, 2 streaming smokes). No cloud. PR #5.
+
+### 2026-10-16 — v2.2.0 release cut (Notetaker + speaker intelligence); full-page meeting detail; prompt-opt investigated
+
+Release-planning pass. Owner decided: version **2.2.0**, **publish as Latest**, **merge PR #5 to
+master**, **defer prompt optimization**. Bumped 2.1.0→2.2.0 across the four synced files; updated the
+README (badge, a prominent "New in v2.2.0 — Notetaker" callout, a Notetaker feature bullet, 2.2.0 asset
+names, fixed the stale "starts as a draft" line); wrote `docs/RELEASE-NOTES-v2.2.0.md`. The stale v2.1.0
+tag + draft release (cut at the panel-only commit, never published) are superseded — deleted in favour
+of 2.2.0. Release ships via `release.yml` (tag push → Windows/macOS/Linux built with
+`--features moonshine` → draft release), published as Latest once CI is green. Ran the full suite before
+cutting: 120 tests + 3 ignored, tsc clean.
+
+**Full-page meeting detail.** The owner pointed out (with Wispr screenshots) that opening a note should
+take over the page, not render inline under the list — "not a scalable solution". Fixed: the list
+(header, record control, add-on banners, library) renders only when nothing is selected; selecting a
+meeting shows a full-page detail with a back button ("All meetings"), a large serif title, and the
+notes/summary/transcript below. tsc clean. (Couldn't screenshot — the preview pane was stuck at ~85 px
+tall this session — but it's a straightforward conditional render.)
+
+**Prompt optimization — investigated, found NOT working, planned.** `optimize_text` echoes the input
+and the `prompt` feature isn't in the shipped build, so the feature does nothing today. PR #3 has the
+real `llama-cpp-2` 0.1.150 integration but is CONFLICTING with master and was never compile-verified
+(llama.cpp builds from source; needs CI + a GGUF + on-device run). Wrote the honest plan to make it
+work — rebase PR #3, prove the link via `test-build.yml` on MSVC, wire a Qwen GGUF, owner-verify on
+device, ship behind the opt-in `prompt` feature — at
+`docs/superpowers/plans/2026-10-16-prompt-optimization-make-it-work.md`. Noted the overlay
+repaint-after-sleep fix in PR #3 as a low-risk extract worth doing sooner. Kept it out of 2.2.0.

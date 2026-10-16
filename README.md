@@ -2,17 +2,24 @@
 
 **Free, open-source, 100% offline voice dictation for Windows, macOS & Linux** — a private, local alternative to Wispr Flow, Superwhisper, and Dragon. Press a hotkey, speak, and clean punctuated text appears at your cursor in any app. No account, no subscription, no cloud.
 
-![AuraScribe](https://img.shields.io/badge/version-2.0.0-blue)
+![AuraScribe](https://img.shields.io/badge/version-2.2.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **🌐 Website: [aurascribe.dev](https://www.aurascribe.dev)** · **[⬇️ Download](https://github.com/JeswinJestin/AuraScribe/releases/latest)** · **[📖 Install guide](docs/INSTALL.md)**
 
-> **v2.0.0 is the first cross-platform release.** Windows is the fully-supported, daily-driver build.
-> **macOS (Apple Silicon) and Linux (.deb) are new previews** — they install, launch, and dictate
-> (global hotkey + typing into other apps), but loading a voice model on those two platforms is still
-> being verified on real hardware. See [**per-OS install instructions**](docs/INSTALL.md) — the macOS
-> build in particular needs a one-time Gatekeeper step because it isn't notarized.
+> **New in v2.2.0 — Notetaker (local meeting transcription).** Record a meeting — **what you hear in
+> the call *plus* your mic** — and get a timestamped, speaker-labelled transcript, entirely on your
+> device. It understands **who is speaking** (mic = *You*, the call audio split into Speaker 1/2/3) and,
+> once the conversation makes it clear, **replaces the labels with real names** — live, mid-meeting.
+> Optional add-ons download on demand: speaker separation and **word-by-word streaming** transcription.
+> A floating, theme-matched panel; editable transcript, notes, and a local summary; resume a past
+> meeting. **Windows-only for now** (it captures system audio via WASAPI). No cloud, no account.
+>
+> Windows remains the fully-supported, daily-driver build; **macOS (Apple Silicon) and Linux (.deb)**
+> are previews for dictation (loading a voice model on those two is still being verified on real
+> hardware). See [**per-OS install instructions**](docs/INSTALL.md) — the macOS build needs a one-time
+> Gatekeeper step because it isn't notarized.
 
 ## ⬇️ Download
 
@@ -21,15 +28,15 @@ latest from the [**Releases**](https://github.com/JeswinJestin/AuraScribe/releas
 
 | OS | Asset | Notes |
 |----|-------|-------|
-| **Windows** (x64) | `AuraScribe_2.0.0_x64-setup.exe` (~8 MB) | Fully supported. SmartScreen may warn on a new unsigned app → *More info → Run anyway*. |
-| **macOS** (Apple Silicon) | `AuraScribe_2.0.0_aarch64.dmg` (~24 MB) | Preview. Not notarized — needs a one-time Gatekeeper step (below). M1/M2/M3/M4. |
-| **Linux** (Debian/Ubuntu x64) | `AuraScribe_2.0.0_amd64.deb` (~6 MB) | Preview. `sudo apt install ./AuraScribe_2.0.0_amd64.deb`. |
+| **Windows** (x64) | `AuraScribe_2.2.0_x64-setup.exe` (~9 MB) | Fully supported. SmartScreen may warn on a new unsigned app → *More info → Run anyway*. |
+| **macOS** (Apple Silicon) | `AuraScribe_2.2.0_aarch64.dmg` (~24 MB) | Preview. Not notarized — needs a one-time Gatekeeper step (below). M1/M2/M3/M4. |
+| **Linux** (Debian/Ubuntu x64) | `AuraScribe_2.2.0_amd64.deb` (~6 MB) | Preview. `sudo apt install ./AuraScribe_2.2.0_amd64.deb`. |
 
 **Full step-by-step for every OS — including the macOS "unidentified developer" fix and the
 permissions dictation needs — is in [docs/INSTALL.md](docs/INSTALL.md).** The short version:
 
 **Windows**
-1. Download and run `AuraScribe_2.0.0_x64-setup.exe`.
+1. Download and run `AuraScribe_2.2.0_x64-setup.exe`.
 2. In **Settings → Voice model**, click **Download & Use** on `moonshine-base-en` (recommended).
 3. Click into any text field, press **Ctrl+Shift+Space**, speak, press again — your words appear.
 
@@ -41,7 +48,7 @@ permissions dictation needs — is in [docs/INSTALL.md](docs/INSTALL.md).** The 
    what lets AuraScribe register the hotkey and type your text. The default hotkey is **⌘⇧Space**.
 
 **Linux** (Debian/Ubuntu)
-1. `sudo apt install ./AuraScribe_2.0.0_amd64.deb`
+1. `sudo apt install ./AuraScribe_2.2.0_amd64.deb`
 2. Launch **AuraScribe**, download a model, dictate with **Ctrl+Shift+Space**. Use an **Xorg** session
    if the hotkey/typing doesn't work under Wayland.
 
@@ -50,6 +57,7 @@ The app lives in the system tray/menu bar; close the window and it keeps running
 ## ✨ Features
 
 - 🎤 **On-device transcription** — four speech engines run locally via sherpa-onnx: **Moonshine** (English), **NVIDIA Parakeet** (25 European languages), **Dolphin** (~40 Asian languages), and **AI4Bharat IndicConformer** (Malayalam/Kannada). Audio never leaves your machine.
+- 🧑‍🤝‍🧑 **Notetaker — local meeting transcription** *(Windows)* — records the call audio you hear **plus** your mic, labels **who's speaking** (mic = *You*; call voices split into Speaker 1/2/3 with an optional voice-fingerprint model), and **auto-detects real names** from the conversation — live, and all on-device. A floating theme-matched panel, editable transcript + notes + a local summary, **resume** a past meeting, and optional **word-by-word streaming**. No cloud, no account.
 - 🖥️ **Cross-platform** — Windows, macOS (Apple Silicon), and Linux (Debian/Ubuntu), from one codebase.
 - ✨ **Automatic cleanup, on by default** — strips filler words, fixes punctuation and sentence casing, all locally, on every engine.
 - 🗂️ **History** — day-grouped, with a usage heatmap and date-range delete, stored only on your device.
@@ -99,8 +107,8 @@ call would break the build loudly.
 | Platform | Status | Dictation loop | Notes |
 |----------|--------|----------------|-------|
 | **Windows** (x64) | ✅ Supported | Hotkey · record · transcribe · inject | The proven, verified build. Auto-start on login supported. |
-| **macOS** (Apple Silicon) | 🧪 Preview (v2.0.0) | Hotkey · record · transcribe · inject | Ad-hoc signed (not notarized). Needs Accessibility permission. **Model-loading pending on-device verification.** |
-| **Linux** (Debian/Ubuntu x64) | 🧪 Preview (v2.0.0) | Hotkey · record · transcribe · inject | X11 recommended (Wayland limits synthetic input). No auto-start yet. **Model-loading pending on-device verification.** |
+| **macOS** (Apple Silicon) | 🧪 Preview (v2.2.0) | Hotkey · record · transcribe · inject | Ad-hoc signed (not notarized). Needs Accessibility permission. **Model-loading pending on-device verification.** |
+| **Linux** (Debian/Ubuntu x64) | 🧪 Preview (v2.2.0) | Hotkey · record · transcribe · inject | X11 recommended (Wayland limits synthetic input). No auto-start yet. **Model-loading pending on-device verification.** |
 
 The whole dictation loop — global hotkey, recording, transcription, and typing into other apps — is
 implemented on **all three** platforms (Windows uses native APIs; macOS/Linux use
@@ -108,7 +116,9 @@ implemented on **all three** platforms (Windows uses native APIs; macOS/Linux us
 [`arboard`](https://github.com/1Password/arboard) for clipboard paste). The macOS/Linux installers
 bundle the sherpa-onnx / ONNX Runtime libraries. What still needs a real-device check on those two is
 whether a downloaded model loads at runtime; if not, `aurascribe.log` names the exact library involved.
-That's why the v2.0.0 non-Windows assets are labeled **preview** and the release starts as a draft.
+That's why the non-Windows assets are labeled **preview**. (The **Notetaker** is Windows-only, since
+it captures system audio via WASAPI.) Each release is cut as a CI draft from its tag, then published
+once the builds are verified.
 
 ## 🎨 Models
 
