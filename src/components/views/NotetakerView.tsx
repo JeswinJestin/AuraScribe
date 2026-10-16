@@ -105,6 +105,9 @@ export function NotetakerView() {
   const [liveSpeakers, setLiveSpeakers] = useState<Speaker[]>([])
   const [speakerModel, setSpeakerModel] = useState<{ downloaded: boolean; size_mb: number } | null>(null)
   const [dlProgress, setDlProgress] = useState<number | null>(null)
+  const [streamModel, setStreamModel] = useState<{ downloaded: boolean; size_mb: number } | null>(null)
+  const [streamProgress, setStreamProgress] = useState<number | null>(null)
+  const [partial, setPartial] = useState<{ text: string; cluster: number } | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const liveEndRef = useRef<HTMLDivElement | null>(null)
 
@@ -131,6 +134,7 @@ export function NotetakerView() {
     loadMeetings()
     refreshStatus()
     ipc.speakerModelStatus().then(setSpeakerModel).catch(() => {})
+    ipc.streamingModelStatus().then(setStreamModel).catch(() => {})
     pollRef.current = setInterval(refreshStatus, 1000)
 
     // Live transcript: append each segment as it is transcribed during capture.
@@ -162,6 +166,14 @@ export function NotetakerView() {
       .then((u) => unlistens.push(u))
       .catch(() => {})
     ipc
+      .onStreamingModelProgress((p) => setStreamProgress(p))
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
+    ipc
+      .onMeetingPartial((p) => setPartial(p.text ? { text: p.text, cluster: p.speaker_cluster } : null))
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
+    ipc
       .onMeetingFinished(() => {
         // Title may have been auto-generated; refresh the list to show it.
         loadMeetings()
@@ -178,7 +190,7 @@ export function NotetakerView() {
   // Keep the live transcript scrolled to the newest line.
   useEffect(() => {
     liveEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [live])
+  }, [live, partial])
 
   const enableSpeakerSeparation = async () => {
     setError(null)
@@ -190,6 +202,19 @@ export function NotetakerView() {
       setError(String(e))
     } finally {
       setDlProgress(null)
+    }
+  }
+
+  const enableStreaming = async () => {
+    setError(null)
+    setStreamProgress(0)
+    try {
+      await ipc.downloadStreamingModel()
+      setStreamModel((s) => (s ? { ...s, downloaded: true } : s))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setStreamProgress(null)
     }
   }
 
@@ -215,6 +240,7 @@ export function NotetakerView() {
     setBusy(true)
     setLive([])
     setLiveSpeakers([])
+    setPartial(null)
     setSelected(null)
     try {
       await ipc.startMeeting()
@@ -407,6 +433,28 @@ export function NotetakerView() {
         </div>
       )}
 
+      {/* Word-by-word streaming — opt-in local model; transcribes live as people speak. */}
+      {streamModel && !streamModel.downloaded && (
+        <div className="mb-3.5 flex items-center justify-between gap-3 rounded-[14px] border bg-card p-[18px]">
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium">Word-by-word transcript</h3>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+              Fill in the transcript live as people speak, instead of every few seconds. One-time{' '}
+              {streamModel.size_mb} MB download — a lighter model, runs on your device, no cloud.
+            </p>
+          </div>
+          {streamProgress == null ? (
+            <button onClick={enableStreaming} className="btn-secondary btn-sm shrink-0">
+              Enable
+            </button>
+          ) : (
+            <span className="mono shrink-0 text-xs text-muted-foreground">
+              {Math.round(streamProgress * 100)}%
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Live transcript — grows as the meeting is transcribed (every few seconds). */}
       {recording && (
         <div className="mb-3.5 rounded-[14px] border bg-card p-[18px]">
@@ -414,34 +462,51 @@ export function NotetakerView() {
             <span className="h-2 w-2 rounded-full bg-[hsl(var(--record))]" aria-hidden />
             <h3 className="text-sm font-medium">Live transcript</h3>
           </div>
-          {live.length === 0 ? (
+          {live.length === 0 && !partial ? (
             <p className="text-[13px] text-muted-foreground">
               Listening… transcribed text will appear here as you speak.
             </p>
           ) : (
-            <div className="flex max-h-72 flex-col gap-3 overflow-y-auto">
-              {groupTurns(live, labelMap(liveSpeakers)).map((turn, ti) => (
-                <div key={ti}>
-                  <div
-                    className="mb-1 text-[12px] font-semibold"
-                    style={{ color: turn.color }}
-                  >
-                    {turn.label}
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {turn.lines.map((line, li) => (
-                      <p
-                        key={li}
-                        className="rounded-lg bg-secondary/50 px-2.5 py-1.5 text-[13px] leading-relaxed"
+            (() => {
+              const liveTurns = groupTurns(live, labelMap(liveSpeakers))
+              const pTurn = partial ? liveTurns.find((t) => t.cluster === partial.cluster) : null
+              return (
+                <div className="flex max-h-72 flex-col gap-3 overflow-y-auto">
+                  {liveTurns.map((turn, ti) => (
+                    <div key={ti}>
+                      <div className="mb-1 text-[12px] font-semibold" style={{ color: turn.color }}>
+                        {turn.label}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        {turn.lines.map((line, li) => (
+                          <p
+                            key={li}
+                            className="rounded-lg bg-secondary/50 px-2.5 py-1.5 text-[13px] leading-relaxed"
+                          >
+                            {line.text}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {partial && (
+                    <div>
+                      <div
+                        className="mb-1 text-[12px] font-semibold"
+                        style={{ color: pTurn?.color ?? (partial.cluster === 0 ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))') }}
                       >
-                        {line.text}
+                        {pTurn?.label ?? (partial.cluster === 0 ? 'You' : 'Speaker')}
+                      </div>
+                      <p className="rounded-lg bg-secondary/30 px-2.5 py-1.5 text-[13px] leading-relaxed text-muted-foreground">
+                        {partial.text}
+                        <span className="ml-0.5 inline-block animate-pulse font-medium text-foreground">▍</span>
                       </p>
-                    ))}
-                  </div>
+                    </div>
+                  )}
+                  <div ref={liveEndRef} />
                 </div>
-              ))}
-              <div ref={liveEndRef} />
-            </div>
+              )
+            })()
           )}
         </div>
       )}

@@ -10,9 +10,6 @@
 //! downloaded model (run with `--ignored`); accuracy and the live wiring still need the owner's
 //! hardware, like every other audio path here. Gated behind the `moonshine` feature.
 
-// Wired into the live loop in the follow-up; the engine + download are verified first.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 /// Model subdirectory under the models dir, and the four files a streaming zipformer needs.
@@ -91,23 +88,31 @@ pub async fn download(
 #[cfg(feature = "moonshine")]
 mod ffi_engine {
     use super::*;
-    use anyhow::{Context, Result};
+    use anyhow::Result;
     use std::ffi::{CStr, CString};
     use std::sync::Mutex;
 
-    /// Owns the raw online-recognizer pointer. The C object is only touched behind our `Mutex`.
-    struct Recognizer(*const sherpa_rs_sys::SherpaOnnxOnlineRecognizer);
-    unsafe impl Send for Recognizer {}
-    unsafe impl Sync for Recognizer {}
-    impl Drop for Recognizer {
+    /// Owns the raw online-recognizer + its persistent stream. The C objects are only touched
+    /// behind our `Mutex`, so the raw pointers are safe to send across threads.
+    struct Inner {
+        rec: *const sherpa_rs_sys::SherpaOnnxOnlineRecognizer,
+        stream: *const sherpa_rs_sys::SherpaOnnxOnlineStream,
+    }
+    unsafe impl Send for Inner {}
+    unsafe impl Sync for Inner {}
+    impl Drop for Inner {
         fn drop(&mut self) {
-            unsafe { sherpa_rs_sys::SherpaOnnxDestroyOnlineRecognizer(self.0) }
+            unsafe {
+                sherpa_rs_sys::SherpaOnnxDestroyOnlineStream(self.stream);
+                sherpa_rs_sys::SherpaOnnxDestroyOnlineRecognizer(self.rec);
+            }
         }
     }
 
-    /// A loaded streaming (online) transducer recognizer.
+    /// A loaded streaming (online) transducer recognizer with one persistent stream — fed
+    /// continuously while a meeting records, so the hypothesis grows word by word.
     pub struct StreamingRecognizer {
-        rec: Mutex<Recognizer>,
+        inner: Mutex<Inner>,
     }
 
     impl StreamingRecognizer {
@@ -151,31 +156,36 @@ mod ffi_engine {
             if rec.is_null() {
                 anyhow::bail!("sherpa-onnx could not create the streaming recognizer");
             }
-            Ok(Self { rec: Mutex::new(Recognizer(rec)) })
+            let stream = unsafe { sherpa_rs_sys::SherpaOnnxCreateOnlineStream(rec) };
+            if stream.is_null() {
+                unsafe { sherpa_rs_sys::SherpaOnnxDestroyOnlineRecognizer(rec) };
+                anyhow::bail!("failed to create online stream");
+            }
+            Ok(Self { inner: Mutex::new(Inner { rec, stream }) })
         }
 
-        /// Decode a 16 kHz mono buffer and return the recognized text. Uses the online API in a
-        /// one-shot manner (feed, finish, drain); the live wiring will instead feed incrementally
-        /// and read the growing result between feeds.
-        pub fn transcribe(&self, samples16k: &[f32]) -> Result<String> {
-            let guard = self.rec.lock().unwrap();
-            let rec = guard.0;
-            let text = unsafe {
-                let stream = sherpa_rs_sys::SherpaOnnxCreateOnlineStream(rec);
-                if stream.is_null() {
-                    anyhow::bail!("failed to create online stream");
-                }
+        /// Feed a chunk of 16 kHz mono audio to the running stream.
+        pub fn accept(&self, samples16k: &[f32]) {
+            let g = self.inner.lock().unwrap();
+            unsafe {
                 sherpa_rs_sys::SherpaOnnxOnlineStreamAcceptWaveform(
-                    stream,
+                    g.stream,
                     16000,
                     samples16k.as_ptr(),
                     samples16k.len() as i32,
                 );
-                sherpa_rs_sys::SherpaOnnxOnlineStreamInputFinished(stream);
-                while sherpa_rs_sys::SherpaOnnxIsOnlineStreamReady(rec, stream) != 0 {
-                    sherpa_rs_sys::SherpaOnnxDecodeOnlineStream(rec, stream);
+            }
+        }
+
+        /// Decode whatever is ready and return the current (growing) hypothesis plus whether the
+        /// recognizer has detected a speech endpoint (end of the current utterance).
+        pub fn poll(&self) -> (String, bool) {
+            let g = self.inner.lock().unwrap();
+            unsafe {
+                while sherpa_rs_sys::SherpaOnnxIsOnlineStreamReady(g.rec, g.stream) != 0 {
+                    sherpa_rs_sys::SherpaOnnxDecodeOnlineStream(g.rec, g.stream);
                 }
-                let result_ptr = sherpa_rs_sys::SherpaOnnxGetOnlineStreamResult(rec, stream);
+                let result_ptr = sherpa_rs_sys::SherpaOnnxGetOnlineStreamResult(g.rec, g.stream);
                 let text = if result_ptr.is_null() {
                     String::new()
                 } else {
@@ -188,10 +198,16 @@ mod ffi_engine {
                     sherpa_rs_sys::SherpaOnnxDestroyOnlineRecognizerResult(result_ptr);
                     s
                 };
-                sherpa_rs_sys::SherpaOnnxDestroyOnlineStream(stream);
-                text
-            };
-            Ok(text.trim().to_string())
+                let endpoint =
+                    sherpa_rs_sys::SherpaOnnxOnlineStreamIsEndpoint(g.rec, g.stream) != 0;
+                (text.trim().to_string(), endpoint)
+            }
+        }
+
+        /// Reset the stream after an endpoint, so the next utterance starts clean.
+        pub fn reset(&self) {
+            let g = self.inner.lock().unwrap();
+            unsafe { sherpa_rs_sys::SherpaOnnxOnlineStreamReset(g.rec, g.stream) }
         }
     }
 }
@@ -207,9 +223,11 @@ impl StreamingRecognizer {
     pub fn load(_models_dir: &Path) -> anyhow::Result<Self> {
         anyhow::bail!("streaming needs the moonshine engine")
     }
-    pub fn transcribe(&self, _samples16k: &[f32]) -> anyhow::Result<String> {
-        Ok(String::new())
+    pub fn accept(&self, _samples16k: &[f32]) {}
+    pub fn poll(&self) -> (String, bool) {
+        (String::new(), false)
     }
+    pub fn reset(&self) {}
 }
 
 #[cfg(all(test, feature = "moonshine"))]
@@ -228,7 +246,54 @@ mod tests {
         assert!(is_downloaded(models_dir), "model files missing under {dir}");
         let rec = StreamingRecognizer::load(models_dir).expect("load streaming recognizer");
         let silence = vec![0.0f32; 16_000]; // 1 second
-        let text = rec.transcribe(&silence).expect("decode without crashing");
-        println!("streaming smoke decode => {text:?}");
+        rec.accept(&silence);
+        let (text, endpoint) = rec.poll();
+        rec.reset();
+        println!("streaming smoke decode => {text:?} (endpoint={endpoint})");
+    }
+
+    /// Fuller end-to-end check: decode a real 16 kHz mono PCM WAV in ~300 ms chunks (as the live
+    /// loop does) and assert it produces actual words. Set AURASCRIBE_MODELS and AURASCRIBE_TEST_WAV.
+    ///   cargo test --features moonshine streaming_decodes_speech -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn streaming_decodes_speech() {
+        let dir = std::env::var("AURASCRIBE_MODELS").expect("set AURASCRIBE_MODELS");
+        let wav = std::env::var("AURASCRIBE_TEST_WAV").expect("set AURASCRIBE_TEST_WAV");
+        let rec = StreamingRecognizer::load(std::path::Path::new(&dir)).expect("load");
+
+        // Minimal WAV read: find the `data` chunk, then interpret as i16 LE mono → f32.
+        let bytes = std::fs::read(&wav).expect("read wav");
+        let mut i = 12; // skip RIFF header
+        let mut data: &[u8] = &[];
+        while i + 8 <= bytes.len() {
+            let id = &bytes[i..i + 4];
+            let sz = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]) as usize;
+            if id == b"data" {
+                data = &bytes[i + 8..(i + 8 + sz).min(bytes.len())];
+                break;
+            }
+            i += 8 + sz + (sz & 1);
+        }
+        let samples: Vec<f32> = data
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+            .collect();
+        assert!(!samples.is_empty(), "no PCM samples parsed");
+
+        let mut finalized = String::new();
+        for chunk in samples.chunks(4800) {
+            rec.accept(chunk);
+            let (text, endpoint) = rec.poll();
+            if endpoint && !text.is_empty() {
+                finalized.push_str(&text);
+                finalized.push(' ');
+                rec.reset();
+            }
+        }
+        let (tail, _) = rec.poll();
+        let full = format!("{finalized}{tail}").trim().to_string();
+        println!("streaming speech decode => {full:?}");
+        assert!(!full.is_empty(), "expected words from a speech sample, got empty");
     }
 }

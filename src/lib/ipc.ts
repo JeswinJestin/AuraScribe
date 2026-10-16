@@ -506,6 +506,16 @@ export async function renameSpeaker(
   return invoke('rename_speaker', { meetingId, cluster, label })
 }
 
+/** Fires as a line is being spoken (streaming): the growing partial hypothesis. Empty text clears it. */
+export async function onMeetingPartial(
+  callback: (payload: { meeting_id: number; text: string; speaker_cluster: number }) => void
+) {
+  return listen<{ meeting_id: number; text: string; speaker_cluster: number }>(
+    'meeting-partial',
+    (e) => callback(e.payload)
+  )
+}
+
 /** Fires after a self-correction re-cluster merges guests, so the UI can remap live line clusters. */
 export async function onMeetingRemap(
   callback: (payload: { meeting_id: number; remap: [number, number][] }) => void

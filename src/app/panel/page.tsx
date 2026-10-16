@@ -53,6 +53,7 @@ export default function PanelPage() {
   const [segments, setSegments] = useState<MeetingSegment[]>([])
   const [speakers, setSpeakers] = useState<Speaker[]>([])
   const [live, setLive] = useState<SpeakerLine[]>([])
+  const [partial, setPartial] = useState<{ text: string; cluster: number } | null>(null)
   const [notes, setNotes] = useState('')
   const [summary, setSummary] = useState<Summary | null>(null)
   const [summarizing, setSummarizing] = useState(false)
@@ -93,6 +94,7 @@ export default function PanelPage() {
     // saved segments for this id arrive, so nothing from the last session lingers.
     setLive([])
     setSpeakers([])
+    setPartial(null)
     setSummary(null)
     ipc
       .getMeeting(meetingId)
@@ -138,6 +140,13 @@ export default function PanelPage() {
       })
       .then((u) => unlistens.push(u))
       .catch(() => {})
+    ipc
+      .onMeetingPartial((p) => {
+        if (activeMeeting.current != null && p.meeting_id !== activeMeeting.current) return
+        setPartial(p.text ? { text: p.text, cluster: p.speaker_cluster } : null)
+      })
+      .then((u) => unlistens.push(u))
+      .catch(() => {})
     // notetaker_ready returns the user's theme — apply it reliably (the in-panel settings fetch
     // was racing/failing, which left the panel stuck on the light surface).
     ipc
@@ -152,7 +161,7 @@ export default function PanelPage() {
 
   useEffect(() => {
     if (tab === 'transcript') liveEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [live, tab])
+  }, [live, partial, tab])
 
   // Each fresh meeting re-docks the window on the Rust side (panel::show → position); keep the
   // expand/restore toggle in sync so its icon doesn't claim "expanded" after a restart.
@@ -387,7 +396,7 @@ export default function PanelPage() {
               </div>
             )}
             <div className="flex flex-col gap-4">
-              {turns.length === 0 ? (
+              {turns.length === 0 && !partial ? (
                 <p className="text-sm leading-relaxed text-muted-foreground">
                   {paused
                     ? 'Paused — transcription stopped. Press Resume to continue.'
@@ -429,6 +438,20 @@ export default function PanelPage() {
                     </div>
                   </div>
                 ))
+              )}
+              {partial && (
+                <div>
+                  <div
+                    className="mb-1.5 text-[13px] font-semibold"
+                    style={{ color: turns.find((t) => t.cluster === partial.cluster)?.color ?? (partial.cluster === 0 ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))') }}
+                  >
+                    {turns.find((t) => t.cluster === partial.cluster)?.label ?? (partial.cluster === 0 ? 'You' : 'Speaker')}
+                  </div>
+                  <p className="rounded-[10px] bg-secondary/30 px-3 py-2 text-[14px] leading-relaxed text-muted-foreground">
+                    {partial.text}
+                    <span className="ml-0.5 inline-block animate-pulse font-medium text-foreground">▍</span>
+                  </p>
+                </div>
               )}
               <div ref={liveEndRef} />
             </div>

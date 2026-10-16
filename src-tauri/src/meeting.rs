@@ -505,6 +505,60 @@ pub struct MeetingRemapEvent {
     pub remap: Vec<(i64, i64)>,
 }
 
+/// Emitted (`meeting-partial`) by the streaming engine as a line is being spoken — the growing,
+/// not-yet-final hypothesis. An empty `text` clears the partial (the line just finalized).
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingPartialEvent {
+    pub meeting_id: i64,
+    pub text: String,
+    pub speaker_cluster: i64,
+}
+
+/// Fingerprint a guest window off the async runtime (the FFI call is blocking). `None` when there's
+/// no embedder loaded or the window can't be embedded.
+async fn embed_guest(
+    embedder: &Arc<std::sync::Mutex<Option<crate::embedding::SpeakerEmbedder>>>,
+    audio: Vec<f32>,
+) -> Option<Vec<f32>> {
+    let e = embedder.clone();
+    tokio::task::spawn_blocking(move || {
+        e.lock().ok().and_then(|mut g| g.as_mut().and_then(|x| x.compute(&audio)))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Re-resolve names over the turns so far and, if the speaker set or any label changed, persist and
+/// emit `meeting-speakers` so the UI relabels live. Shared by the chunked and streaming loops.
+async fn sync_speakers(
+    db: &Arc<Mutex<crate::db::Database>>,
+    app: &AppHandle,
+    meeting_id: i64,
+    turns: &[crate::diarize::Turn],
+    last_labels: &mut Vec<(i64, String)>,
+) {
+    let (speakers, resolved) = compute_speakers(turns);
+    let sig: Vec<(i64, String)> = speakers.iter().map(|s| (s.cluster, s.label.clone())).collect();
+    if sig != *last_labels {
+        {
+            let db = db.lock().await;
+            for s in &speakers {
+                let is_named = resolved.contains_key(&s.cluster);
+                if let Err(e) = db
+                    .upsert_speaker(meeting_id, s.cluster, &s.label, s.is_self, is_named)
+                    .await
+                {
+                    tracing::warn!("Meeting: failed to upsert speaker: {}", e);
+                }
+            }
+        }
+        app.emit("meeting-speakers", MeetingSpeakersEvent { meeting_id, speakers })
+            .ok();
+        *last_labels = sig;
+    }
+}
+
 // Layer B tuning (cosine on L2-normalized TitaNet embeddings). Defaults from common practice;
 // tune on-device. JOIN: min similarity to attach to an existing guest rather than open a new one.
 const JOIN_THRESHOLD: f32 = 0.55;
@@ -713,6 +767,24 @@ pub async fn start_meeting(
         let embedder = Arc::new(std::sync::Mutex::new(embedder));
         let allow_recluster = resume_id.is_none();
 
+        // Layer D: if the streaming model is downloaded, use the online recognizer for word-by-word
+        // live transcription. Otherwise the proven chunked offline path runs (unchanged).
+        let streaming: Option<Arc<crate::streaming::StreamingRecognizer>> =
+            if crate::streaming::is_downloaded(asr.models_dir()) {
+                match crate::streaming::StreamingRecognizer::load(asr.models_dir()) {
+                    Ok(s) => {
+                        tracing::info!("Word-by-word streaming ON (streaming model loaded)");
+                        Some(Arc::new(s))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Streaming model present but failed to load: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
         let task = tokio::spawn(async move {
             // Attributed turns so far, for live name resolution (seeded from the transcript when
             // resuming); and the last speaker labels we emitted, so we only re-emit on change.
@@ -726,6 +798,138 @@ pub async fn start_meeting(
                 None
             };
             let mut ticks: u32 = 0;
+
+            // --- Layer D: word-by-word streaming loop (when the streaming model is loaded) --------
+            if let Some(sr) = streaming.clone() {
+                let mut utter_sys: Vec<f32> = Vec::new();
+                let mut utter_mic: Vec<f32> = Vec::new();
+                let mut last_partial = String::new();
+                loop {
+                    // ~300 ms cadence so the line fills in quickly, honoring stop.
+                    for _ in 0..3 {
+                        if !st.recording.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    let still = st.recording.load(Ordering::Relaxed);
+                    if st.paused.load(Ordering::Relaxed) {
+                        st.system_buf.lock().await.clear();
+                        st.mic_buf.lock().await.clear();
+                        if !still {
+                            break;
+                        }
+                        continue;
+                    }
+                    let (sys, sys_rate, mic, mic_rate) = {
+                        let mut sb = st.system_buf.lock().await;
+                        let mut mb = st.mic_buf.lock().await;
+                        let sr_ = *st.system_rate.lock().await;
+                        let mr = *st.mic_rate.lock().await;
+                        (std::mem::take(&mut *sb), sr_, std::mem::take(&mut *mb), mr)
+                    };
+                    let sys16 = to_asr_rate(&sys, sys_rate);
+                    let mic16 = to_asr_rate(&mic, mic_rate);
+                    utter_sys.extend_from_slice(&sys16);
+                    utter_mic.extend_from_slice(&mic16);
+                    let mixed = mix_streams(&sys16, &mic16);
+
+                    // Feed + decode off the async runtime (FFI is blocking).
+                    let (partial, endpoint) = {
+                        let sr2 = sr.clone();
+                        let audio = mixed;
+                        tokio::task::spawn_blocking(move || {
+                            if !audio.is_empty() {
+                                sr2.accept(&audio);
+                            }
+                            sr2.poll()
+                        })
+                        .await
+                        .unwrap_or((String::new(), false))
+                    };
+
+                    if partial != last_partial {
+                        // Live speaker guess from the louder channel so far (finalized exactly below).
+                        let guess = if crate::diarize::rms(&utter_mic) >= crate::diarize::rms(&utter_sys) {
+                            crate::diarize::SELF_CLUSTER
+                        } else {
+                            crate::diarize::SELF_CLUSTER + 1
+                        };
+                        app_task
+                            .emit(
+                                "meeting-partial",
+                                MeetingPartialEvent {
+                                    meeting_id,
+                                    text: partial.clone(),
+                                    speaker_cluster: guess,
+                                },
+                            )
+                            .ok();
+                        last_partial = partial.clone();
+                    }
+
+                    if endpoint && !partial.is_empty() {
+                        // Finalize the utterance: attribute a speaker, save, name, clear the partial.
+                        let channel = crate::diarize::attribute_channel(
+                            crate::diarize::rms(&utter_mic),
+                            crate::diarize::rms(&utter_sys),
+                        );
+                        let cluster = match channel {
+                            crate::diarize::Channel::Self_ => crate::diarize::SELF_CLUSTER,
+                            _ => {
+                                let mut c = crate::diarize::SELF_CLUSTER + 1;
+                                if let Some(cl) = clusterer.as_mut() {
+                                    if let Some(v) = embed_guest(&embedder, utter_sys.clone()).await {
+                                        c = cl.assign(&v);
+                                    }
+                                }
+                                c
+                            }
+                        };
+                        let offset_ms = offset_base_ms + start_instant.elapsed().as_millis() as i64;
+                        {
+                            let db = db.lock().await;
+                            if let Err(e) =
+                                db.add_meeting_segment(meeting_id, offset_ms, &partial, cluster).await
+                            {
+                                tracing::warn!("Meeting: failed to save segment: {}", e);
+                            }
+                        }
+                        app_task
+                            .emit(
+                                "meeting-segment",
+                                MeetingSegmentEvent {
+                                    meeting_id,
+                                    offset_ms,
+                                    text: partial.clone(),
+                                    speaker_cluster: cluster,
+                                },
+                            )
+                            .ok();
+                        turns.push(crate::diarize::Turn { cluster, text: partial.clone() });
+                        sync_speakers(&db, &app_task, meeting_id, &turns, &mut last_labels).await;
+                        app_task
+                            .emit(
+                                "meeting-partial",
+                                MeetingPartialEvent { meeting_id, text: String::new(), speaker_cluster: cluster },
+                            )
+                            .ok();
+                        let sr3 = sr.clone();
+                        tokio::task::spawn_blocking(move || sr3.reset()).await.ok();
+                        utter_sys.clear();
+                        utter_mic.clear();
+                        last_partial.clear();
+                    }
+
+                    if !still {
+                        break;
+                    }
+                }
+                tracing::info!("Meeting streaming loop finished (meeting {})", meeting_id);
+                return;
+            }
+
+            // --- Chunked offline loop (default; proven path) -------------------------------------
             loop {
                 for _ in 0..(CHUNK_SECS * 10) {
                     if !st.recording.load(Ordering::Relaxed) {
