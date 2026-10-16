@@ -25,9 +25,19 @@ command (user edits win). (3) **UI**: `src/lib/speakers.ts` shared turn-grouping
 colours; the panel and in-app view render the transcript **grouped by speaker** — coloured, editable
 name headings, grouped bubbles, an "N speakers" chip — live and on review. **120 Rust tests pass, tsc
 clean, verified in /preview** (You + a named guest, grouped/coloured/editable). **Status of the four
-layers:** A (You/guest) + C (names) are **live**; guests are a single cluster until **Layer B**'s
-on-device speaker-embedding model splits them into Speaker 1/2/3 (next, needs hardware verification);
-**Layer D** (word-by-word streaming) and **resume-a-past-meeting** are the remaining goals. **Also
+layers:** A (You/guest) + C (names) are **live**; **Layer B** (guest split into Speaker 1/2/3) is
+**built** — `embedding.rs` wraps sherpa-rs `EmbeddingExtractor` (nemo_en_titanet_small, ~40 MB
+**opt-in download**, "Separate speakers" banner in the Notetaker view), the chunker fingerprints each
+guest window → `OnlineClusterer` → Speaker 1/2/3, re-clusters every ~30 s to self-correct
+(`meeting-remap` event + DB remap), and falls back to a single guest cluster when the model isn't
+downloaded; the embedding *extraction* needs on-device verification like the loopback path. **Resume a
+past meeting** is **built** — `start_meeting(resume_id)` continues an existing meeting (offsets +
+naming + guest numbering continue; `finish_meeting` won't shrink duration), with a **Resume** button in
+the detail. **Layer D (word-by-word streaming) is the one remaining goal and is deliberately NOT built
+blind:** sherpa-rs 0.6.8 exposes only *offline* recognizers, so streaming needs hand-written unsafe
+`sherpa-rs-sys` FFI for an online transducer + a streaming model + a reworked live/partial-result loop
+— all of which require the owner's hardware to verify. Per "verify by running" and "don't rewrite the
+proven audio path on a guess", it's scoped for a focused on-device session, not a sandbox guess. **Also
 fixed this session:** the panel now **loads fresh for each meeting** (the reused panel window kept the
 previous meeting's live transcript — reset on new meeting + drop stray cross-meeting segment events).
 No cloud added anywhere. On PR #5; v2.1.0 release draft **held** pending on-device sign-off.

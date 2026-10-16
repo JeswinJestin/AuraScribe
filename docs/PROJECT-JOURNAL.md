@@ -701,3 +701,32 @@ Layer B's **speaker-embedding model** (a download, on-device verification) split
 the periodic self-correction, and never surfacing a low-confidence name are our own ideas — nothing
 copied from Wispr. No cloud. Also fixed: the reused panel window now loads fresh per meeting instead
 of carrying the previous transcript. All on branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
+
+### 2026-10-16 — Notetaker speaker intelligence: Layer B (guest split) + Resume; Layer D scoped honestly
+
+Continued end-to-end from Layers A+C. **Layer B (guest diarization)** shipped: `embedding.rs` wraps
+sherpa-rs `EmbeddingExtractor` with the `nemo_en_titanet_small` model (~40 MB, verified the URL at
+sherpa's "speaker-recongition-models" release — note sherpa's own misspelled tag), downloaded opt-in
+like the ASR models (an "Enable / Separate speakers" banner, never automatic). The chunker fingerprints
+each guest window, the already-tested `OnlineClusterer` assigns Speaker 1/2/3, and every ~30 s it
+re-clusters to self-correct drift — emitting a `meeting-remap` event (UI rewrites live line clusters)
+and remapping stored segments in the DB (via a temp offset to avoid mid-pass collisions). When the
+model isn't present, guests stay one cluster (A/C unchanged). **Resume** shipped: `start_meeting` took
+an optional `resume_id` that continues an existing meeting — offsets continue past the prior duration,
+naming turns are seeded from the stored transcript, guest numbering continues above the highest
+existing speaker, `finish_meeting` won't shrink a resumed duration, and recluster is disabled on resume
+(the clusterer holds only this session's voices). A Resume button sits in the meeting detail.
+
+**Layer D (word-by-word streaming) — deliberately not built this session, and why.** Checked the
+binding: sherpa-rs 0.6.8 has only *offline* recognizers (`zipformer`/`transducer` call
+`SherpaOnnxCreateOfflineStream`); the only online-stream FFI it surfaces is inside keyword-spot and the
+speaker embedder. True streaming would mean hand-written unsafe `sherpa-rs-sys` FFI for an online
+transducer (`SherpaOnnxCreateOnlineRecognizer` + `IsOnlineStreamReady`/`DecodeOnlineStream`/endpoint),
+a new streaming model download, and a reworked capture loop with partial-result finalization + UI —
+none verifiable in the sandbox. CLAUDE.md is explicit ("verify by running, not reading"; "do not
+rewrite the proven audio path on a guess"), so shipping a large unverified unsafe-FFI pipeline change
+would be wrong. Layer D is scoped for a focused session with the hardware in the loop.
+
+Verification: `diarize` has 15 unit tests (incl. the real-transcript fixture); 120 Rust tests pass;
+tsc clean; Layer B/Resume UI verified in /preview. The embedding extraction and any future streaming
+need on-device confirmation. No cloud anywhere. Branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
