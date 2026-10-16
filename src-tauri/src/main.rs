@@ -28,6 +28,7 @@ mod overlay;
 mod panel;
 mod sound;
 mod storage;
+mod streaming;
 mod summary;
 mod streaks;
 mod system;
@@ -347,6 +348,8 @@ fn main() {
             meeting::rename_speaker,
             meeting::speaker_model_status,
             meeting::download_speaker_model,
+            meeting::streaming_model_status,
+            meeting::download_streaming_model,
             meeting::delete_meeting,
             meeting::summarize_meeting,
             meeting::save_meeting_notes,

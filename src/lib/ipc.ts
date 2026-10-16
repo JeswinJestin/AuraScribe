@@ -535,6 +535,26 @@ export async function onSpeakerModelProgress(callback: (progress: number) => voi
   return listen<number>('speaker-model-progress', (e) => callback(e.payload))
 }
 
+export interface StreamingModelStatus {
+  downloaded: boolean
+  size_mb: number
+}
+
+/** Whether the opt-in word-by-word streaming model is downloaded. */
+export async function streamingModelStatus(): Promise<StreamingModelStatus> {
+  return invoke<StreamingModelStatus>('streaming_model_status')
+}
+
+/** Download the opt-in word-by-word streaming model (~45 MB, on-device). */
+export async function downloadStreamingModel(): Promise<void> {
+  return invoke('download_streaming_model')
+}
+
+/** Progress (0..1) of the streaming model download. */
+export async function onStreamingModelProgress(callback: (progress: number) => void) {
+  return listen<number>('streaming-model-progress', (e) => callback(e.payload))
+}
+
 /** Fires after Stop once the meeting is finalized and (maybe) auto-renamed. */
 export async function onMeetingFinished(
   callback: (payload: { meeting_id: number; title: string }) => void

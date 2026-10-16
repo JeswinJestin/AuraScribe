@@ -1065,6 +1065,40 @@ pub async fn download_speaker_model(
     .map_err(|e| e.to_string())
 }
 
+/// Status of the optional word-by-word streaming model.
+#[derive(serde::Serialize)]
+pub struct StreamingModelStatus {
+    pub downloaded: bool,
+    pub size_mb: u64,
+}
+
+#[command]
+pub async fn streaming_model_status(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<StreamingModelStatus, String> {
+    Ok(StreamingModelStatus {
+        downloaded: crate::streaming::is_downloaded(state.asr.models_dir()),
+        size_mb: crate::streaming::MODEL_SIZE_MB,
+    })
+}
+
+/// Download the opt-in word-by-word streaming model (~45 MB, on-device). Emits
+/// `streaming-model-progress` {0..1}. Never automatic; the only extra network use is this download.
+#[command]
+pub async fn download_streaming_model(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dir = state.asr.models_dir().to_path_buf();
+    let app2 = app.clone();
+    crate::streaming::download(&dir, move |p| {
+        app2.emit("streaming-model-progress", p).ok();
+    })
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn rename_meeting(
     state: State<'_, crate::app_state::AppState>,
