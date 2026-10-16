@@ -730,3 +730,27 @@ would be wrong. Layer D is scoped for a focused session with the hardware in the
 Verification: `diarize` has 15 unit tests (incl. the real-transcript fixture); 120 Rust tests pass;
 tsc clean; Layer B/Resume UI verified in /preview. The embedding extraction and any future streaming
 need on-device confirmation. No cloud anywhere. Branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
+
+### 2026-10-16 — Layer D streaming engine built + FFI verified by running; selected-row highlight fix
+
+Owner asked to continue the pending work. Took Layer D (word-by-word streaming) from "scoped" to
+"engine built and the scary part proven". sherpa-rs 0.6.8 has only offline recognizers, so streaming
+needs the raw `sherpa-rs-sys` online API — which turned out fully present (`CreateOnlineRecognizer`,
+`AcceptWaveform`, `IsOnlineStreamReady`/`DecodeOnlineStream`, `GetOnlineStreamResult`, endpoint/reset)
+with simple config structs (OnlineTransducerModelConfig = encoder/decoder/joiner; OnlineModelConfig;
+OnlineRecognizerConfig). Built `streaming.rs` mirroring the proven `nemo_ctc.rs` raw-FFI pattern, using
+the small `sherpa-onnx-streaming-zipformer-en-20M` model (~45 MB, opt-in 4-file download).
+
+**Crucially, de-risked the unsafe FFI by running it** rather than trusting the code: downloaded the
+real model to scratch and an `#[ignore]` smoke test loaded it and decoded 1 s of silence to `""`
+without crashing — proving the struct layouts and call sequence are right on this machine. (One fix the
+run caught: the result destructor is `SherpaOnnxDestroyOnlineRecognizerResult`, not
+`...OnlineStreamResult`.) Added opt-in download/status commands + ipc.
+
+Deliberately did **not** ship a user-facing streaming toggle or wire the live loop: a download button
+that changed nothing would violate "never claim more than the code does", and the live partial loop's
+behaviour (feed cadence, endpoint rules, partial UI) genuinely needs real speech to tune. So Layer D
+now = verified engine + download plumbing; remaining = the live partial-emission wiring, lower-risk now
+the FFI is proven. Also fixed the selected-meeting highlight (was `bg-muted` warm grey, a grey slab on
+the navy glass theme) to tint from `--primary` so it matches every theme. 120 tests + 2 ignored
+(notepad E2E, streaming smoke); tsc clean. Branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.

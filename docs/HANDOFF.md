@@ -33,11 +33,21 @@ guest window → `OnlineClusterer` → Speaker 1/2/3, re-clusters every ~30 s to
 downloaded; the embedding *extraction* needs on-device verification like the loopback path. **Resume a
 past meeting** is **built** — `start_meeting(resume_id)` continues an existing meeting (offsets +
 naming + guest numbering continue; `finish_meeting` won't shrink duration), with a **Resume** button in
-the detail. **Layer D (word-by-word streaming) is the one remaining goal and is deliberately NOT built
-blind:** sherpa-rs 0.6.8 exposes only *offline* recognizers, so streaming needs hand-written unsafe
-`sherpa-rs-sys` FFI for an online transducer + a streaming model + a reworked live/partial-result loop
-— all of which require the owner's hardware to verify. Per "verify by running" and "don't rewrite the
-proven audio path on a guess", it's scoped for a focused on-device session, not a sandbox guess. **Also
+the detail. **Layer D (word-by-word streaming) — engine BUILT and FFI VERIFIED; live wiring remains.**
+`streaming.rs` builds the online transducer recognizer sherpa-rs has no safe wrapper for, via raw
+`sherpa-rs-sys` FFI (same pattern as `nemo_ctc.rs`): a small streaming zipformer (~45 MB, opt-in
+download of encoder/decoder/joiner/tokens) through `CreateOnlineRecognizer` + `AcceptWaveform` +
+`IsOnlineStreamReady`/`DecodeOnlineStream` + `GetOnlineStreamResult` + endpoint/reset. The unsafe FFI
+was **de-risked by running it**: an `#[ignore]` smoke test (`streaming_ffi_smoke`) loaded the real
+model on this machine and decoded silence to `""` without crashing — so the config structs and call
+sequence are correct (run: download the 4 files into `<models>/streaming-zipformer-en-20M`, then
+`cargo test --features moonshine streaming_ffi_smoke -- --ignored`). Opt-in download + status commands
+and ipc wrappers are in. **Not yet wired into the live meeting loop**, so no user-facing "word-by-word"
+claim ships (per "never claim more than the code does"). **Remaining:** the live partial-emission loop
+(a persistent stream fed frequently + a partial transcript line + endpoint/latency tuning) — lower
+risk now the FFI is proven, but best tuned on-device with real speech. **Also fixed:** the
+selected-meeting highlight now tints from the accent (`--primary`) so it matches light/dark/glass
+instead of a grey slab on the navy theme. **Also
 fixed this session:** the panel now **loads fresh for each meeting** (the reused panel window kept the
 previous meeting's live transcript — reset on new meeting + drop stray cross-meeting segment events).
 No cloud added anywhere. On PR #5; v2.1.0 release draft **held** pending on-device sign-off.
