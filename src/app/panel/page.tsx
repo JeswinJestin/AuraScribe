@@ -56,6 +56,10 @@ export default function PanelPage() {
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const liveEndRef = useRef<HTMLDivElement | null>(null)
   const loadedFor = useRef<number | null>(null)
+  // The panel window is created once and reused for every meeting, so its state survives across
+  // meetings. This ref is the id the live transcript currently belongs to — used to drop stray
+  // segment events from a just-ended meeting that would otherwise bleed into a fresh one.
+  const activeMeeting = useRef<number | null>(null)
 
   const applyTheme = useCallback((theme: string) => {
     const root = document.documentElement
@@ -81,6 +85,11 @@ export default function PanelPage() {
   useEffect(() => {
     if (meetingId == null || loadedFor.current === meetingId) return
     loadedFor.current = meetingId
+    activeMeeting.current = meetingId
+    // A new meeting loads fresh: wipe the previous meeting's live lines and summary before the
+    // saved segments for this id arrive, so nothing from the last session lingers.
+    setLive([])
+    setSummary(null)
     ipc
       .getMeeting(meetingId)
       .then((d) => {
@@ -96,7 +105,11 @@ export default function PanelPage() {
     const poll = setInterval(refreshStatus, 1000)
     const unlistens: Array<() => void> = []
     ipc
-      .onMeetingSegment((p) => setLive((prev) => [...prev, { offset_ms: p.offset_ms, text: p.text }]))
+      .onMeetingSegment((p) => {
+        // Drop late events from a meeting that already ended (prevents cross-meeting bleed).
+        if (activeMeeting.current != null && p.meeting_id !== activeMeeting.current) return
+        setLive((prev) => [...prev, { offset_ms: p.offset_ms, text: p.text }])
+      })
       .then((u) => unlistens.push(u))
       .catch(() => {})
     // notetaker_ready returns the user's theme — apply it reliably (the in-panel settings fetch
