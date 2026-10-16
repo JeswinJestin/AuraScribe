@@ -6,7 +6,115 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-09-23 (**v2.0.3 release prep** — the window/audio fixes below are on branch `fix/window-pinning-and-audio-capture` as **PR #4** (CI green: cargo test 88/88 + tsc), the rebuilt 2.0.2 installer was verified installed+launched on Windows, and a **build-only `workflow_dispatch` Release run built Windows ✓ and the Linux `.deb` ✓** (clean-container smoke test passed) — macOS failed on a transient `next build` Google-font fetch (`Newsreader` override), re-run triggered; not a code issue (Win+Linux built the same frontend fine). **Version bumped 2.0.2 → 2.0.3** across the four synced files; **release notes drafted** at `docs/RELEASE-NOTES-v2.0.3.md`; diagnostic capture logging added (format at start + deferred-flush count at stop). **PR #3 (`feat/prompt-optimizer-and-overlay-fix`) evaluated and NOT merged** — it is `CONFLICTING`/`DIRTY` against master AND its own body marks the llama-cpp-2 optimizer "not compile-verified" + both features "need on-device verification"; it fails "merge only if implemented properly" on both counts, so it stays open for its own rebase + `test-build.yml` on-device cycle. **Remaining before publishing v2.0.3:** (a) owner confirms the Windows app (window no longer pans; dictation still full), (b) friend runs the Linux `.deb` + sends `aurascribe.log`, then merge PR #4 → `git tag v2.0.3` → review draft → publish. Prior: 2026-09-21 — **Window/layout "slides around & feels cheap" fix + audio-capture robustness for the Linux "only half my words" report** — three targeted fixes, all sandbox-verified where possible, honest about what still needs the friend's hardware. (1) **Content can no longer pan/rubber-band inside the frameless window.** `html`/`body` are now pinned to the viewport (`body { position: fixed; inset: 0; overflow: hidden }`, `html { overflow: hidden }`) and the root React containers use `w-full/h-full` instead of `w-screen/h-screen` (`100vw` reserves scrollbar width and overflowed a few px). **Verified in the browser preview**: zero horizontal/vertical document overflow at both the design size and the 860×560 minimum, sidebar fully on-screen at min width (left:0 → right:216), nothing clipped. This is the root cause of *both* the Windows "moves within the frame" report and the Linux "width not kept / layout breaking" report — a document that could scroll even 1px let webkit/GTK pan the whole page. (2) **Audio capture is now sample-format-agnostic** (`build_capture_stream::<T>` dispatches on `config.sample_format()` → f32 / i16 / u16, converting via `f32::from_sample`). The old callback hard-coded `&[f32]`; many Linux/ALSA & PipeWire mics default to an **integer** format, on which the f32 stream fails to build → captured nothing. `check_microphone_permission` got the same treatment so an i16 device no longer falsely reads as "mic blocked." Capture now also **logs the detected format/rate/channels at start and a "deferred flushes" count at stop** (`aurascribe.log`), so the friend's Linux run shows the fixes firing (e.g. `format=I16` + a non-zero deferred count = the no-drop path saved audio). (3) **The capture callback no longer DROPS audio on lock contention** — the single most likely cause of "only half my words were transcribed." The realtime callback could only `try_lock` the shared buffer and *silently discarded the whole callback* when the drainer held it; it now accumulates into a per-stream `local` buffer and flushes on the next successful lock, so contention only *defers* samples, never loses them. `cargo check` clean, **88/88 tests pass**, tsc clean. **⚠️ Cannot confirm the transcription-accuracy improvement from this Windows box** — the drop/format bugs are real and platform-plausible, but the friend's on-device `.deb` run + `aurascribe.log` is still the proof. Nothing pushed/committed. Prior: 2026-08-28 — **Linux DICTATION VERIFIED on real hardware** — the friend's `.deb` installs, downloads models, records and transcribes: the missing-`.so`/segfault crash is genuinely fixed on-device. **New open issue: accuracy — transcription drops/misses words** for that friend (which model unknown, awaiting his reply). Pipeline reviewed (`commands.rs` capture at ~L471 + drain at ~L268): candidate causes are (1) live-chunk boundary effects, (2) the capture callback `try_lock()`-drops-audio pattern (real smell, small window), (3) an f32-only `build_input_stream` assumption that would fail on i16-default ALSA devices. Needs the friend's **model + a concrete said-vs-shown example + `~/.local/share/AuraScribe/aurascribe.log`** to pinpoint before fixing — do not rewrite the proven audio path on a guess. Also: **v2.0.2 PUBLISHED as Latest** (https://github.com/JeswinJestin/AuraScribe/releases/tag/v2.0.2) — `.exe`/`.deb`/`.dmg` attached; Linux verified, macOS labelled untested preview, release notes carry the known-accuracy note. Merged PR #2 (Linux `.deb` library bundling + Storage management), bumped 2.0.1→2.0.2, tagged `v2.0.2`. Release run 33146495019 GREEN on all 3 OSes; the Linux clean-machine `ldd` gate passed again. Draft has `AuraScribe_2.0.2_x64-setup.exe` (9.4 MB), `_aarch64.dmg` (25.9 MB), `_amd64.deb` (11.2 MB, libs bundled). **Not yet published to Latest** — Windows is proven, but Linux/macOS *dictation* still needs on-hardware confirmation (friend testing the .deb). Publish the draft from the Releases page when ready. Prior: 2026-08-27 — **Linux `.deb` fix — bundle the sherpa/onnx `.so`**: a tester's `.deb` died with `error while loading shared libraries: libsherpa-onnx-c-api.so`, and hand-compiling sherpa-onnx to fill the gap then segfaulted (ABI/version mismatch). Root cause: the Linux CI job never bundled the runtime libs (only macOS did). Fixed in `release.yml` — a Linux step injects the **exact** libs this build linked against into `/usr/lib/AuraScribe` (matching build.rs's rpath), sets `$ORIGIN` rpath on each so sherpa finds onnxruntime, and **verifies the layout with `ldd` in CI** before repacking. Ships in the next tag; owner tags + runs the `.deb` to confirm a model loads. See the Linux entry below. ALSO today: **Storage management + lightweight model direction** — new Settings → Storage view (per-model size + delete, totals, DB size) and one-click reclaim of orphaned/partial model downloads; `.part` partials auto-cleaned on startup; found ~6.2 GB of dead Whisper leftovers on the owner's machine that nothing was cleaning up. Prompt-optimization model switched to **Qwen2.5-0.5B (~0.4 GB) default, 1.5B optional** to stay light. `storage.rs` + 6 tests (88/0 total), tsc clean, Storage UI rendered in `/preview`. See the two 2026-08-27 entries below. ALSO earlier today: **prompt-optimization engine — Phase 1 scaffolding SHIPPED**, Tasks 1–4 of the plan: `optimize.rs` intent-adaptive system prompt + `prompt` cargo feature, clipboard `capture_selection`, migration `010` + enable/hotkey settings + UI section, and the `optimize_selection` command wired to a second global hotkey. All sandbox-verifiable and green — 5 optimize tests, `--features prompt` compiles. The **actual LLM call stubs to identity** (echo) until the owner-only Tasks 5–6: wire `llama-cpp-2` + a Qwen2.5-1.5B Q4 GGUF, then build/test on-device. See the 2026-08-27 entry below. Prior: 2026-08-25 — merged PR #1; **overlay reliability fix**; **PR CI** now runs `cargo test`+`tsc` on every PR (green on the runner); **opt-in spectral noise reduction** (`denoise.rs`, FFT spectral subtraction, off by default, 5 unit tests, 77/0). Overlay + noise-room efficacy need an on-device rebuild/mic to confirm. Prompt-optimization engine = still a spec-first item (needs a local-LLM dependency; not built). See below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
+**Last updated:** 2026-10-16 (**v2.2.0 release cut — Notetaker + speaker intelligence shipped**.
+Version bumped 2.1.0→**2.2.0** across the four synced files (package.json, Cargo.toml, Cargo.lock,
+tauri.conf.json). README updated (badge, a "New in v2.2.0 — Notetaker" callout, a Notetaker feature
+bullet, 2.2.0 asset names); **`docs/RELEASE-NOTES-v2.2.0.md`** written. Owner chose: version **2.2.0**,
+**publish as Latest**, **merge PR #5 to master**, **defer prompt-optimization** to its own effort
+(plan at `docs/superpowers/plans/2026-10-16-prompt-optimization-make-it-work.md`). The stale v2.1.0
+tag + draft release (cut at the old panel-only commit) are superseded by 2.2.0. Release mechanism:
+`release.yml` builds Windows/macOS/Linux with `--features moonshine` on a tag push and creates a draft;
+publish as Latest once CI is green. **Prompt optimization is NOT working** today (it echoes input; the
+`prompt` feature is off in the shipped build) — PR #3 has the real llama-cpp-2 code but is
+conflicting + never compile-verified; see the plan. Also this session: the in-app **meeting detail now
+opens as a full page** (back button, big serif title) instead of inline under the list — the Wispr-like
+scalable layout the owner asked for. **Prior same-day — Notetaker speaker intelligence — live speaker labels + names
+(Layers A + C), plus the panel chrome/list work below**. The Notetaker now understands *who* is
+speaking and names them, **mid-meeting**, more capably than Wispr. Design:
+`docs/superpowers/specs/2026-10-16-notetaker-speaker-intelligence-design.md`. **What shipped this
+pass:** (1) a pure, 15-test **`diarize` engine** — Layer A `attribute_channel` ("You" vs guest
+straight from our *separate* mic/loopback buffers — near-perfect on headphones, zero model), Layer B
+`OnlineClusterer` (cosine centroids + agglomerative self-correction; the maths is tested, the
+embedding extractor it consumes lands later on-device), and Layer C `resolve_speaker_names`
+(address/intro/self-intro detection, confidence-gated, spelling-normalised). A fixture built from the
+owner's **real pasted Wispr transcript** proves it resolves Teresa + Lenny, **rejects the one-off
+"William" mis-hearing**, and leaves the lone stray line unnamed — i.e. it avoids the exact mislabel
+Wispr itself produced. (2) **Wired live**: migration `014_meeting_speakers.sql` (speakers table +
+`meeting_segments.speaker_cluster`); `process_tick` attributes each window by channel RMS; the chunker
+re-resolves names every window and emits a `meeting-speakers` event so the UI relabels a cluster
+**live and retroactively** ("Speaker 1" → "Teresa"); `get_meeting` returns speakers; `rename_speaker`
+command (user edits win). (3) **UI**: `src/lib/speakers.ts` shared turn-grouping + theme-aware speaker
+colours; the panel and in-app view render the transcript **grouped by speaker** — coloured, editable
+name headings, grouped bubbles, an "N speakers" chip — live and on review. **120 Rust tests pass, tsc
+clean, verified in /preview** (You + a named guest, grouped/coloured/editable). **Status of the four
+layers:** A (You/guest) + C (names) are **live**; **Layer B** (guest split into Speaker 1/2/3) is
+**built** — `embedding.rs` wraps sherpa-rs `EmbeddingExtractor` (nemo_en_titanet_small, ~40 MB
+**opt-in download**, "Separate speakers" banner in the Notetaker view), the chunker fingerprints each
+guest window → `OnlineClusterer` → Speaker 1/2/3, re-clusters every ~30 s to self-correct
+(`meeting-remap` event + DB remap), and falls back to a single guest cluster when the model isn't
+downloaded; the embedding *extraction* needs on-device verification like the loopback path. **Resume a
+past meeting** is **built** — `start_meeting(resume_id)` continues an existing meeting (offsets +
+naming + guest numbering continue; `finish_meeting` won't shrink duration), with a **Resume** button in
+the detail. **Layer D (word-by-word streaming) — engine BUILT and FFI VERIFIED; live wiring remains.**
+`streaming.rs` builds the online transducer recognizer sherpa-rs has no safe wrapper for, via raw
+`sherpa-rs-sys` FFI (same pattern as `nemo_ctc.rs`): a small streaming zipformer (~45 MB, opt-in
+download of encoder/decoder/joiner/tokens) through `CreateOnlineRecognizer` + `AcceptWaveform` +
+`IsOnlineStreamReady`/`DecodeOnlineStream` + `GetOnlineStreamResult` + endpoint/reset. The unsafe FFI
+was **de-risked by running it**: an `#[ignore]` smoke test (`streaming_ffi_smoke`) loaded the real
+model on this machine and decoded silence to `""` without crashing — so the config structs and call
+sequence are correct (run: download the 4 files into `<models>/streaming-zipformer-en-20M`, then
+`cargo test --features moonshine streaming_ffi_smoke -- --ignored`). Opt-in download + status commands
+and ipc wrappers are in. **Now fully wired and verified end to end.**
+`StreamingRecognizer` holds a persistent online stream (`accept`/`poll`/`reset`); when the streaming
+model is downloaded the chunker runs a **streaming loop** at ~300 ms cadence that emits a
+`meeting-partial` event (the growing hypothesis) and, on a speech **endpoint**, finalizes the
+utterance through the normal speaker-attribution + naming flow. The proven chunked offline path is
+untouched and runs when streaming is off. UI: a growing **partial line** (muted, pulsing caret, under
+the right speaker) in the panel and the in-app live transcript, plus an opt-in "Word-by-word
+transcript" download banner. **Verified by running:** a smoke test decodes a real speech wav in
+live-style chunks to actual words ("THE YELLOW LAMPS WOULD LIGHT UP HERE AND THERE…"), proving the
+FFI + the accept/poll/endpoint/reset flow the live loop uses. The 20M model is light (all-caps, a bit
+less accurate — labeled as such); swapping in a larger streaming model later is a one-line model
+change. **So all four layers (A/B/C/D) + Resume are built; remaining polish is on-device accuracy/
+latency tuning and optionally a punctuation/casing pass on streaming output.** **Also fixed:** the
+selected-meeting highlight now tints from the accent (`--primary`) so it matches light/dark/glass. **Also
+fixed this session:** the panel now **loads fresh for each meeting** (the reused panel window kept the
+previous meeting's live transcript — reset on new meeting + drop stray cross-meeting segment events).
+No cloud added anywhere. On PR #5; v2.1.0 release draft **held** pending on-device sign-off.
+**Prior same-day — Notetaker panel window chrome + premium list redesign** — the
+floating panel now has real window chrome top-right: **Expand** (⤢) grows it to a large centered
+reading window, **restore** (the "small window" icon) docks it back to its default full-height
+right-edge size, **Minimize**, and **Close** (hides the panel and brings the main app window back —
+the meeting keeps recording, controllable again from the in-app Notetaker view). New Rust commands
+`panel_dock` / `panel_expand` / `panel_close` in `panel.rs` do the monitor-aware sizing (expand =
+~72%×92% of the work area, centered; restore reuses the existing dock `position()`); expanded view
+constrains text to a 720px column so lines stay readable. The **in-app Notetaker list** was
+redesigned Wispr-style: meetings are now **grouped by day** ("Today" / "Yesterday" / "Tue, Oct 13")
+with clean rows — a rounded icon tile, title, and a muted `time · duration · words` subline — with
+theme-robust **hover** (`bg-muted/70`) and **selected** (`bg-muted` + inset `primary/0.35` ring)
+states and a delete action that reveals on hover. `tsc` clean, `cargo check` clean, both verified in
+`/preview` (panel chrome + date-grouped list, dark; selected ring confirmed). On PR #5; the v2.1.0
+release draft stays **held** pending the owner's on-device sign-off. **Prior (2026-10-14):**
+**Notetaker Phase 2 — on-device VERIFIED + real-time transcript** —
+the owner ran a real capture and `aurascribe.log` confirms **both paths work**: mic `format=F32,
+48000Hz, 1ch` and **WASAPI system loopback `48000Hz, 2ch, 32bit, float=true`** — the previously
+unverified COM audio path is proven on hardware, and Test A (Notepad paste-first fix) works perfectly.
+Phase 2 added: (1) **real-time transcript** — the chunker now emits a `meeting-segment` event per
+window (cadence lowered 10s→6s) and the Notetaker view shows a **live transcript panel** that grows
+while recording, instead of only after Stop; (2) **local auto-rename** — `stop_meeting` derives a
+title from the first sentence of the transcript (no model, no cloud) and emits `meeting-finished`.
+`cargo check` clean, **cargo test 95/95** (3 new `derive_title` tests), `tsc` clean, live panel +
+auto-title rendered/verified in `/preview` (added event-API stubs to the harness). **Open product
+decision (owner raised):** the owner is reconsidering the strict no-cloud rule for *recency-dependent*
+features (fact-check/enrichment) and wants a strategy — captured as a decision to make, NOT yet built;
+summaries remain local-only (opt-in Qwen) until decided. Nothing cloud added. **Prior (2026-10-13):**
+**Notepad injection fix + Notetaker MVP (Phase 1)** — see the
+`### 2026-10-13` section below and `docs/superpowers/specs/2026-10-13-notetaker-design.md`. Two
+things landed: (1) **the permanent fix for the Windows 11 Notepad garbling** a user (Ryan) reported
+— his short dictations came out as `......`/`?????` **only in Notepad**, because the modern
+WinAppSDK/RichEdit Notepad mishandles rapid injected Unicode keystrokes (Notepad++ / browser worked,
+isolating it). Fix: **Windows now pastes every dictation** (the path that provably can't corrupt
+text); per-char typing is the fallback only. `cargo check` clean, injection tests pass. **E2E
+confirmation = owner dictating into the new Notepad.** (2) **Notetaker Phase 1** — local meeting
+transcription backend: migration `011_meetings.sql` + DB methods, `meeting.rs` with **WASAPI loopback
+(system audio) via the existing `windows` crate** + mic mix + a chunker reusing the dictation ASR
+pipeline, 7 Tauri commands, and a **Notetaker sidebar view** (start/stop, list, read, delete). **92/92
+cargo tests, tsc clean, UI rendered + verified in `/preview`** (list + transcript detail). **NOT yet
+verified: the WASAPI loopback + mic capture + transcription at runtime** — that is COM audio code the
+sandbox cannot exercise; it needs the owner to run a real call and check `aurascribe.log` (logs the
+detected loopback format/rate). No cloud, no account, **no AI summary** (explicitly out of scope to
+respect the no-cloud/lightweight non-negotiables). Nothing committed/pushed. **Prior:** 2026-09-23
+(**v2.0.3 release prep** — the window/audio fixes below are on branch `fix/window-pinning-and-audio-capture` as **PR #4** (CI green: cargo test 88/88 + tsc), the rebuilt 2.0.2 installer was verified installed+launched on Windows, and a **build-only `workflow_dispatch` Release run built Windows ✓ and the Linux `.deb` ✓** (clean-container smoke test passed) — macOS failed on a transient `next build` Google-font fetch (`Newsreader` override), re-run triggered; not a code issue (Win+Linux built the same frontend fine). **Version bumped 2.0.2 → 2.0.3** across the four synced files; **release notes drafted** at `docs/RELEASE-NOTES-v2.0.3.md`; diagnostic capture logging added (format at start + deferred-flush count at stop). **PR #3 (`feat/prompt-optimizer-and-overlay-fix`) evaluated and NOT merged** — it is `CONFLICTING`/`DIRTY` against master AND its own body marks the llama-cpp-2 optimizer "not compile-verified" + both features "need on-device verification"; it fails "merge only if implemented properly" on both counts, so it stays open for its own rebase + `test-build.yml` on-device cycle. **Remaining before publishing v2.0.3:** (a) owner confirms the Windows app (window no longer pans; dictation still full), (b) friend runs the Linux `.deb` + sends `aurascribe.log`, then merge PR #4 → `git tag v2.0.3` → review draft → publish. Prior: 2026-09-21 — **Window/layout "slides around & feels cheap" fix + audio-capture robustness for the Linux "only half my words" report** — three targeted fixes, all sandbox-verified where possible, honest about what still needs the friend's hardware. (1) **Content can no longer pan/rubber-band inside the frameless window.** `html`/`body` are now pinned to the viewport (`body { position: fixed; inset: 0; overflow: hidden }`, `html { overflow: hidden }`) and the root React containers use `w-full/h-full` instead of `w-screen/h-screen` (`100vw` reserves scrollbar width and overflowed a few px). **Verified in the browser preview**: zero horizontal/vertical document overflow at both the design size and the 860×560 minimum, sidebar fully on-screen at min width (left:0 → right:216), nothing clipped. This is the root cause of *both* the Windows "moves within the frame" report and the Linux "width not kept / layout breaking" report — a document that could scroll even 1px let webkit/GTK pan the whole page. (2) **Audio capture is now sample-format-agnostic** (`build_capture_stream::<T>` dispatches on `config.sample_format()` → f32 / i16 / u16, converting via `f32::from_sample`). The old callback hard-coded `&[f32]`; many Linux/ALSA & PipeWire mics default to an **integer** format, on which the f32 stream fails to build → captured nothing. `check_microphone_permission` got the same treatment so an i16 device no longer falsely reads as "mic blocked." Capture now also **logs the detected format/rate/channels at start and a "deferred flushes" count at stop** (`aurascribe.log`), so the friend's Linux run shows the fixes firing (e.g. `format=I16` + a non-zero deferred count = the no-drop path saved audio). (3) **The capture callback no longer DROPS audio on lock contention** — the single most likely cause of "only half my words were transcribed." The realtime callback could only `try_lock` the shared buffer and *silently discarded the whole callback* when the drainer held it; it now accumulates into a per-stream `local` buffer and flushes on the next successful lock, so contention only *defers* samples, never loses them. `cargo check` clean, **88/88 tests pass**, tsc clean. **⚠️ Cannot confirm the transcription-accuracy improvement from this Windows box** — the drop/format bugs are real and platform-plausible, but the friend's on-device `.deb` run + `aurascribe.log` is still the proof. Nothing pushed/committed. Prior: 2026-08-28 — **Linux DICTATION VERIFIED on real hardware** — the friend's `.deb` installs, downloads models, records and transcribes: the missing-`.so`/segfault crash is genuinely fixed on-device. **New open issue: accuracy — transcription drops/misses words** for that friend (which model unknown, awaiting his reply). Pipeline reviewed (`commands.rs` capture at ~L471 + drain at ~L268): candidate causes are (1) live-chunk boundary effects, (2) the capture callback `try_lock()`-drops-audio pattern (real smell, small window), (3) an f32-only `build_input_stream` assumption that would fail on i16-default ALSA devices. Needs the friend's **model + a concrete said-vs-shown example + `~/.local/share/AuraScribe/aurascribe.log`** to pinpoint before fixing — do not rewrite the proven audio path on a guess. Also: **v2.0.2 PUBLISHED as Latest** (https://github.com/JeswinJestin/AuraScribe/releases/tag/v2.0.2) — `.exe`/`.deb`/`.dmg` attached; Linux verified, macOS labelled untested preview, release notes carry the known-accuracy note. Merged PR #2 (Linux `.deb` library bundling + Storage management), bumped 2.0.1→2.0.2, tagged `v2.0.2`. Release run 33146495019 GREEN on all 3 OSes; the Linux clean-machine `ldd` gate passed again. Draft has `AuraScribe_2.0.2_x64-setup.exe` (9.4 MB), `_aarch64.dmg` (25.9 MB), `_amd64.deb` (11.2 MB, libs bundled). **Not yet published to Latest** — Windows is proven, but Linux/macOS *dictation* still needs on-hardware confirmation (friend testing the .deb). Publish the draft from the Releases page when ready. Prior: 2026-08-27 — **Linux `.deb` fix — bundle the sherpa/onnx `.so`**: a tester's `.deb` died with `error while loading shared libraries: libsherpa-onnx-c-api.so`, and hand-compiling sherpa-onnx to fill the gap then segfaulted (ABI/version mismatch). Root cause: the Linux CI job never bundled the runtime libs (only macOS did). Fixed in `release.yml` — a Linux step injects the **exact** libs this build linked against into `/usr/lib/AuraScribe` (matching build.rs's rpath), sets `$ORIGIN` rpath on each so sherpa finds onnxruntime, and **verifies the layout with `ldd` in CI** before repacking. Ships in the next tag; owner tags + runs the `.deb` to confirm a model loads. See the Linux entry below. ALSO today: **Storage management + lightweight model direction** — new Settings → Storage view (per-model size + delete, totals, DB size) and one-click reclaim of orphaned/partial model downloads; `.part` partials auto-cleaned on startup; found ~6.2 GB of dead Whisper leftovers on the owner's machine that nothing was cleaning up. Prompt-optimization model switched to **Qwen2.5-0.5B (~0.4 GB) default, 1.5B optional** to stay light. `storage.rs` + 6 tests (88/0 total), tsc clean, Storage UI rendered in `/preview`. See the two 2026-08-27 entries below. ALSO earlier today: **prompt-optimization engine — Phase 1 scaffolding SHIPPED**, Tasks 1–4 of the plan: `optimize.rs` intent-adaptive system prompt + `prompt` cargo feature, clipboard `capture_selection`, migration `010` + enable/hotkey settings + UI section, and the `optimize_selection` command wired to a second global hotkey. All sandbox-verifiable and green — 5 optimize tests, `--features prompt` compiles. The **actual LLM call stubs to identity** (echo) until the owner-only Tasks 5–6: wire `llama-cpp-2` + a Qwen2.5-1.5B Q4 GGUF, then build/test on-device. See the 2026-08-27 entry below. Prior: 2026-08-25 — merged PR #1; **overlay reliability fix**; **PR CI** now runs `cargo test`+`tsc` on every PR (green on the runner); **opt-in spectral noise reduction** (`denoise.rs`, FFT spectral subtraction, off by default, 5 unit tests, 77/0). Overlay + noise-room efficacy need an on-device rebuild/mic to confirm. Prompt-optimization engine = still a spec-first item (needs a local-LLM dependency; not built). See below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
 **Prior update:** 2026-08-18 (**v2.0.0** — first cross-platform release: CI now green on Windows/macOS/Linux. Fixed the warm-cache Windows DLL regression, switched Linux to a reliable `.deb`, and made the macOS `.dmg` self-contained: rpath in build.rs + embedded sherpa/ONNX dylibs + ad-hoc signing. New `docs/INSTALL.md` with macOS Gatekeeper steps. README + ARCHITECTURE.md rewritten for cross-platform. macOS/Linux model-loading still needs an on-device check — see below) &nbsp;·&nbsp; **Owner:** Jeswin Thomas Jestin
 
@@ -91,6 +199,232 @@ machine-path leaks in the pushable tree.
 - **PROCESS RULE:** there must be exactly ONE AuraScribe installed. To show the owner a change,
   rebuild the installer and reinstall (elevated, replacing Program Files) — never launch a loose
   `target\*` build. Ignoring this caused the recurring "old UI" confusion (Round 19).
+
+### 2026-10-15 (later 4) — Notetaker panel: theme fix + premium redesign (impeccable pass)
+
+Owner: panel opened WHITE regardless of theme, and wanted Wispr-grade polish. Used the `impeccable`
+skill (craft floor) over the real warm-glass tokens (the stale "instrument" DESIGN.md is superseded).
+- **Theme fix (the white bug):** the in-panel `getSettings` was racing/failing, leaving the light
+  surface. `notetaker_ready` now **returns the user's theme** (read from the DB), and the panel
+  applies it from that return value — one reliable call. Falls back to glass.
+- **Premium redesign** (`panel/page.tsx`): **serif display title** (`font-display` Newsreader, like
+  the app + Wispr), per-tab **metadata chips** (Transcript: ⏱ duration · N words; Summary: ~N min
+  read), cleaner tabs/spacing to the craft floor, formatted summary bullets + keyword chips, a
+  "Saved to this device only" notes footer, and a polished Pause/Resume + Stop bar. Record dot pulses
+  while recording.
+- **Browser surfaces** (`globals.css`): themed **text selection, caret, and a thin scrollbar** from
+  the palette (craft-floor "cheapest signal it was designed"), app-wide.
+`cargo check` + `tsc` clean. Verified in the browser (glass populated: serif title, chips, bullets,
+keywords; light/dark surface mechanism verified earlier). Theme now comes from the backend so the
+white-everywhere bug is fixed at the source.
+
+### 2026-10-15 (later 3) — Notetaker panel: theme-aware + legible, Pause/Resume, bigger
+
+Owner feedback: the panel forced the glass theme regardless of the Settings theme, the glass was
+hard to read/write on, and it needed a Resume option + more size.
+- **Theme-aware & legible** (`panel/page.tsx`) — the panel now reads `settings.theme` and applies the
+  same light/dark/system/glass logic as the main app, and uses a **solid, legible surface** in every
+  theme (white card in light, dark card in dark, a self-contained rich **navy gradient** for glass —
+  no reliance on desktop backdrop-blur, which WebView2 can't do on Windows, which is why the old glass
+  looked flat/unreadable). Verified in the browser: light → white panel + ink text; dark → dark panel
+  + light text.
+- **Pause / Resume** — new `paused` state in `MeetingState`; the chunker discards captured audio while
+  paused (nothing transcribed) and the meeting stays open until Stop. `pause_meeting`/`resume_meeting`
+  commands + `meeting_status.paused`; a Pause/Resume button in the panel's bottom bar; the timer reads
+  "Paused".
+- **Bigger** — panel 400→**480px** wide, taller, smaller docking gaps.
+`cargo check` + `tsc` clean. Window/theme runtime still needs the owner's on-device confirmation.
+
+### 2026-10-15 (later 2) — Notetaker UX pass: window swap, full-height panel, calmer accent
+
+Owner feedback on the first panel build (wanted it Wispr-organized, main window to get out of the
+way, and the accent toned down). Changes:
+- **Window swap** (`meeting.rs`) — `start_meeting` now **hides the main window** and shows the panel;
+  `stop_meeting` hides the panel and **re-shows + focuses the main window**. "Meeting mode" like Wispr.
+- **Full-height right-docked panel** (`panel.rs`) — `position()` now sizes the window to the monitor
+  height (clear of the taskbar) at a fixed ~400px width and docks it flush right (DPI-scaled), instead
+  of a small centred box.
+- **Panel layout** (`panel/page.tsx`) — compact draggable header (title · elapsed · minimize), tabs,
+  a content area that fills, and a **persistent bottom bar** with a prominent **Stop & save** (plus
+  **Generate summary** on the Summary tab) — the Wispr bottom-anchored action pattern.
+- **Calmer accent** (`globals.css`) — `--primary` was neon `#4C6FFF` at **100% saturation**; toned to
+  a calm indigo (`228 64% 56%` light / `228 56% 64%` dark), with `--ring`/`--standby` matched. Fixes
+  the "button too bright / doesn't match" report for BOTH the Notetaker Start button and the Dictate
+  record button (same token).
+`cargo check` + `tsc` clean; panel full-height layout + toned button verified in the browser. **Window
+swap is Rust runtime — needs the owner's on-device run** (multi-window), same caveat as the overlay.
+**Release not re-cut yet** — iterate the design on local builds first, then re-tag v2.1.0.
+
+### 2026-10-15 (later) — Floating Notetaker panel window
+
+Owner asked for a **separate floating window when a meeting starts** (like Wispr Flow's Notetaker
+panel). Built, mirroring the proven `overlay.rs` secondary-window lifecycle:
+- **`panel.rs`** (new) — a `panel`-labelled, 440×600, frameless, transparent, always-on-top,
+  **interactive** (not click-through) window; created hidden at setup, `show()` on `start_meeting`,
+  `hide()` on `stop_meeting`, with a `READY` flag + `notetaker_ready` command (catch-up show if the
+  page loads after a meeting started) — same 404-safety and is_dev path handling as the overlay.
+  Added `panel` to `capabilities/default.json` windows.
+- **`src/app/panel/page.tsx`** (new) — the floating UI in AuraScribe's glass theme: draggable header
+  (editable title · elapsed · minimize · **Stop**) + **My thoughts / Transcript / Summary** tabs. The
+  transcript appends live via the `meeting-segment` event; notes autosave; summary on demand. Clean,
+  Wispr-like, but 100% local.
+- `meeting.rs` shows/hides the panel on start/stop and emits segments to it.
+
+**Verified:** `cargo check` clean, `tsc` clean, and the panel rendered + tab-switching exercised in
+the browser (header, tabs, Stop, glass theme all correct). **NOT verified from the sandbox:** the
+window actually showing on meeting start (multi-window Tauri runtime) — needs the owner's on-device
+run, same as the overlay. Release notes updated to announce the panel.
+
+### 2026-10-15 — v2.1.0 cut: PR #5 opened + release draft tagged
+
+All the 2026-10-13..15 work (Notepad paste-fix + E2E validation, Notetaker MVP → Phase 2 real-time +
+auto-rename, local extractive summary, editable meetings, opt-in fuzzy dictionary correction) is on
+branch `feat/notetaker-mvp-and-notepad-fix`, **pushed** and opened as
+**[PR #5](https://github.com/JeswinJestin/AuraScribe/pull/5)** (CI: `cargo test` + `tsc`). Version
+**bumped 2.0.3 → 2.1.0** across the four synced files; release notes at
+`docs/RELEASE-NOTES-v2.1.0.md`. Tag **`v2.1.0`** pushed → `release.yml` builds the 3-OS **draft**
+release. **TO PUBLISH:** merge PR #5 to master (prefer a merge commit so the tag stays on master, or
+re-tag master), confirm the new Notetaker features on-device (summary / fuzzy / editable meetings /
+auto-rename — Notepad fix + loopback capture already owner-verified), then publish the draft from the
+Releases page. **D (opt-in online AI endpoint) is NOT in this release** — pending the explicit
+build-it decision.
+
+### 2026-10-14 (later) — Notetaker: editable meetings (rename, My notes, edit transcript)
+
+Owner asked to make meetings maintainable like Wispr's "My thoughts". Added, all local:
+- **Rename** — inline-editable meeting title in the detail header (uses the existing
+  `rename_meeting`); a pencil affordance on hover.
+- **My notes** — free-text notes per meeting (migration `013_meeting_notes.sql` adds `meetings.notes`;
+  `save_meeting_notes` command, debounced autosave as you type). `MeetingRow`/`Meeting` gained `notes`,
+  and `list_meetings`/`get_meeting` SELECT it.
+- **Editable transcript** — click any line to edit it (`update_meeting_segment`, which also recomputes
+  `word_count`); clearing a line deletes it (`delete_meeting_segment`).
+`cargo test 105/105`, `tsc` clean, verified in `/preview` (title → inline textbox, notes field,
+click-to-edit lines).
+
+### 2026-10-14 (later) — Notetaker: local summary (item A) + record-button visibility fix
+
+**Record button fix (owner-reported).** The Notetaker Start/Stop button used `btn-ink`, whose light
+background (`hsl(--foreground)`) + white text is near-invisible in the default Glass/dark theme. Now a
+filled `bg-primary` pill with a red record dot (Start) / record-coloured pill (Stop) — the same
+colour-means-state language as the Dictate record button. Works in light and dark.
+
+**Item A — local meeting summary.** A *Qwen/llama.cpp abstractive* summary needs a multi-GB model +
+from-source build (unverifiable from the sandbox) and strains "lightweight", so the shippable,
+charter-fit version is **extractive** (`summary.rs`): it scores the transcript's own sentences by
+significant-word density (Luhn/TF), returns the top ~5 in original order + up to 8 keywords. **No
+model, no cloud, deterministic, can't hallucinate.** New `summarize_meeting` command (computes on
+demand from segments), `summarizeMeeting` IPC, and a **Summary** card in the meeting detail (sparkle
+header "· on-device, extractive", bulleted key points, keyword chips). `cargo test 105/105` (4 new
+summary tests), `tsc` clean, verified in `/preview` (Summarize → card renders). **The richer
+abstractive summary (fluent prose / action items) remains the opt-in LLM upgrade** via the `prompt`
+Qwen path — still unwired (needs the llama.cpp build), still never cloud.
+
+### 2026-10-14 (later) — Accuracy: opt-in fuzzy dictionary correction (item B)
+
+First of the owner's A/B/C/D accuracy/feature asks. **In-recognizer contextual biasing (the original
+"B") is NOT feasible** — `sherpa-rs`'s `MoonshineRecognizer::transcribe` (the default engine) takes
+only audio, no hotword/context list, so true in-model biasing would require forking the ASR path (a
+no-go per CLAUDE.md). Shipped the achievable, local, verifiable form instead: **`expand.rs::fuzzy_correct`**
+— after the exact dictionary pass, optionally fix **near-miss mishears of the user's own Words** (e.g.
+"kuberneties" → "Kubernetes"). Conservative to avoid false positives: whole-word, case-insensitive,
+≥5-char terms only; bounded Levenshtein (≤1 for len 5–7, ≤2 longer); same first letter; length within
+±2; replaces only on a single unambiguous match. **Opt-in** via a new `fuzzy_dictionary` setting
+(migration `012`, default **off**) + a "Fuzzy-correct my Words" toggle in Settings, so default dictation
+is byte-for-byte unchanged. `cargo test 101/101` (6 new fuzzy tests incl. false-positive guards), `tsc`
+clean. **Status of the rest:** A (local Qwen summary) needs the llama.cpp build + model — owner-hardware
+to verify; C (diarization) needs a speaker model + real multi-speaker audio; D (online enrichment) is
+the no-cloud line — an explicit go-decision, built only if the owner says so. Real-world accuracy of the
+fuzzy pass needs the owner's mic to judge (logic is unit-proven). On branch, not merged.
+
+### 2026-10-14 — Notetaker Phase 2: on-device verified + real-time transcript + local auto-rename
+
+**Capture VERIFIED on the owner's hardware.** `aurascribe.log` from a real run:
+`Meeting mic capture: format=F32, 48000Hz, 1ch` and
+`Meeting loopback capture: 48000Hz, 2ch, 32bit, float=true`. The WASAPI loopback COM path — the one
+piece the sandbox could not exercise — works. Test A (the paste-first Notepad fix) also confirmed
+working by the owner.
+
+**Phase 2 shipped:**
+- **Real-time transcript.** `meeting.rs` chunker now emits a `meeting-segment` Tauri event
+  (`{meeting_id, offset_ms, text}`) each time a window is transcribed, and `CHUNK_SECS` was lowered
+  10→6 for a snappier live feel (fine for Moonshine's short-form model). `NotetakerView.tsx` shows a
+  **Live transcript** panel that appends segments as they arrive while recording, auto-scrolling —
+  the fix for "it only shows after Stop." Events are the fast path; the 1s status poll remains the
+  authoritative fallback.
+- **Local auto-rename.** `stop_meeting` runs `derive_title()` (first sentence / first ~8 words of the
+  transcript, capped — **no model, no network**) when the user never set a title, saves it, and emits
+  `meeting-finished {id, title}` so the list refreshes. 3 unit tests.
+- **Preview harness** gained Tauri event-API stubs (`transformCallback` + `plugin:event|listen`) so
+  event-driven views preview without throwing.
+
+**Verified:** `cargo check` clean, **cargo test 95/95**, `tsc` clean, live panel + recording timer
+rendered in `/preview`. The real-time event flow itself only runs under real Tauri (events) — the
+owner confirms it in the installed app; the backend capture it depends on is already log-verified.
+
+**Open product decision (NOT built):** the owner is questioning the strict no-cloud non-negotiable for
+features that need *current* external data (fact-checking claims made in a meeting, entity enrichment)
+and for stronger summaries, noting a local model's knowledge is frozen/old. This is a genuine
+identity-level decision (local-first privacy is the product's whole differentiator vs Wispr Flow).
+**Recorded as a decision to make, with a proposed principled middle path** (local by default for
+dictation/transcription/summary; any online call strictly opt-in, per-feature, clearly labeled, never
+sending content without explicit consent). Nothing cloud has been added. Summaries stay local-only
+(opt-in Qwen, still unwired) until the owner decides. See the session chat for the full strategy menu
+(accuracy ideas: contextual biasing/hotwords, app-aware vocab, VAD endpointing, punctuation model,
+diarization, streaming partials).
+
+### 2026-10-13 — Notepad injection fix (paste-first on Windows) + Notetaker MVP Phase 1
+
+Two pieces of work this session; full notetaker design at
+`docs/superpowers/specs/2026-10-13-notetaker-design.md`.
+
+**1. Permanent fix for the Windows 11 Notepad garbling (user report, Ryan, Oct 2026).** His short
+dictations came out as runs of `......` / `?????` **only in Windows Notepad**; the same build typed
+cleanly into Notepad++ and the browser. Root cause: short text (≤120 chars) took the per-character
+`SendInput`/`KEYEVENTF_UNICODE` **typing** path, and the rewritten **Windows 11 Notepad**
+(WinAppSDK/RichEdit) mishandles rapid injected Unicode keystrokes — a documented buffering defect
+(AutoHotkey "SendInput halted in Win 11 Notepad"; microsoft/terminal #12977). Notepad++ (Scintilla)
+and Chromium drain injected input normally, which is exactly why Ryan's A/B found only Notepad broken.
+**Fix (`injection.rs`): Windows now pastes EVERY dictation** (the clipboard + Ctrl+V path the code
+already trusted as "cannot corrupt the text"); per-char typing is the **fallback only** for windows
+that refuse paste. The clipboard-restore race was already solved (background thread, 500 ms,
+restore-only-if-still-ours). macOS/Linux paths unchanged. `cargo check` clean, both injection tests
+pass. **E2E confirmation is the owner dictating into the modern Notepad** (interactive injection can't
+be exercised headless — the repo's standard caveat for dictation).
+
+**2. Notetaker (local meeting transcription) — Phase 1 foundation.** The owner chose to build a
+**local-capture MVP** (recording → transcript, **no cloud AI summary**) over shelving it. The charter
+conflict was resolved explicitly in the spec: Wispr-Flow-style cloud STT and LLM summaries are **out**
+(they break the no-cloud + lightweight non-negotiables); capturing **what you hear in the call
+(WASAPI system loopback) + your mic**, transcribed **locally**, is **in**. Landed this session, all
+isolated from the dictation hot path:
+- **`migration 011_meetings.sql`** — `meetings` + `meeting_segments` (transcript text only; no audio
+  persisted). DB methods in `db.rs` (`create_meeting`, `add_meeting_segment`, `finish_meeting`,
+  `list_meetings`, `get_meeting`, `list_meeting_segments`, `rename_meeting`, `delete_meeting`).
+- **`meeting.rs`** (new) — WASAPI **loopback** capture of the default render endpoint via the
+  **`windows` crate already in Cargo.toml** (added `Win32_Media_Audio` + `Win32_Media_KernelStreaming`
+  features — **no new dependency**, respecting "weigh every dependency"), **+ mic capture** (reuses the
+  proven format-agnostic cpal path), mixed to mono 16 kHz and fed through the **existing** resample →
+  trim → gain → ASR pipeline by a 10 s chunker that writes segments. 7 Tauri commands
+  (`start_meeting`/`stop_meeting`/`meeting_status`/`list_meetings`/`get_meeting`/`rename_meeting`/
+  `delete_meeting`), registered in `main.rs`. `MeetingState` added to `AppState`.
+- **Frontend** — a **Notetaker** sidebar view (`NotetakerView.tsx`): start/stop with elapsed timer,
+  past-meetings list, click-to-read transcript (mono timestamps), delete. IPC wrappers in `ipc.ts`,
+  `WidgetRail` cards, `/preview` harness tab with mock data.
+- **Platform honesty:** `start_meeting` returns an explicit "Windows-only for now" error off Windows
+  (macOS/Linux loopback needs a virtual/monitor device). The UI states system-audio is Windows-only
+  and that long multi-speaker meetings are less accurate than dictation.
+
+**Verified:** `cargo check` clean, **`cargo test` 92/92** (88 + 4 new meeting mix/downmix tests),
+`npm run typecheck` clean, and the **Notetaker UI rendered + exercised in `/preview`** (list +
+transcript detail screenshotted). **NOT verified (be honest):** the **WASAPI loopback + mic capture +
+transcription at runtime** — it compiles and follows the documented WASAPI loopback sequence, but it is
+COM audio code the sandbox cannot exercise. The owner's first real call + `aurascribe.log` (which logs
+the detected loopback format/rate) is the proof; treat it as unverified until then, exactly like the
+macOS/Linux dictation audio paths. **Phase 2** = owner runs a call, confirm/repair capture, add a
+recording indicator + live transcript. **Phase 3** = long-form accuracy (a dedicated meeting model,
+GPU-optional), export/search, optional local summary **only** via the already-opt-in `prompt` LLM —
+never bundled, never cloud. **Nothing committed/pushed.**
 
 ### 2026-09-21 — Window/layout pinning + audio-capture robustness (Windows drag + Linux "half the words")
 

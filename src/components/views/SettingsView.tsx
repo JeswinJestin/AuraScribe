@@ -571,6 +571,14 @@ export function SettingsView({
             hint="Cuts steady noise (fans, AC, traffic hum) before transcription, on your device. Best in a consistently noisy room; leave off in a quiet one."
           />
         </div>
+        <div className="mt-4">
+          <Toggle
+            checked={settings.fuzzy_dictionary}
+            onChange={(v) => onSaveSettings({ fuzzy_dictionary: v })}
+            label="Fuzzy-correct my Words"
+            hint="Also fixes near-miss mishears of your Words entries (e.g. 'kuberneties' → 'Kubernetes'), not just exact matches. Off by default — it can occasionally rewrite a close unrelated word."
+          />
+        </div>
       </Section>
 
       <Section

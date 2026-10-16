@@ -78,7 +78,8 @@ impl Database {
                 ai_cleanup_enabled = $5, remove_fillers = $6, language = $7,
                 theme = $8, start_at_login = $9, sound_cues = $10, onboarded = $11,
                 hotkey_enabled = $12, noise_suppression = $13,
-                prompt_optimize_enabled = $14, prompt_optimize_hotkey = $15
+                prompt_optimize_enabled = $14, prompt_optimize_hotkey = $15,
+                fuzzy_dictionary = $16
             WHERE id = 1",
         )
         .bind(&s.hotkey)
@@ -96,6 +97,7 @@ impl Database {
         .bind(s.noise_suppression)
         .bind(s.prompt_optimize_enabled)
         .bind(&s.prompt_optimize_hotkey)
+        .bind(s.fuzzy_dictionary)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -514,6 +516,284 @@ impl Database {
             top_app_dictations,
         })
     }
+
+    // --- Notetaker (local meeting transcription) -------------------------------------------------
+    // See docs/superpowers/specs/2026-10-13-notetaker-design.md. Transcript text only; no audio.
+
+    /// Create a meeting row at the start of capture; returns its id.
+    pub async fn create_meeting(&self, title: &str, source: &str) -> Result<i64, sqlx::Error> {
+        let started_at = chrono::Utc::now().timestamp();
+        let result = sqlx::query(
+            "INSERT INTO meetings (title, started_at, source) VALUES ($1, $2, $3)",
+        )
+        .bind(title)
+        .bind(started_at)
+        .bind(source)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Append a transcribed segment to a meeting as it is produced during capture.
+    pub async fn add_meeting_segment(
+        &self,
+        meeting_id: i64,
+        offset_ms: i64,
+        text: &str,
+        speaker_cluster: i64,
+    ) -> Result<i64, sqlx::Error> {
+        let created_at = chrono::Utc::now().timestamp();
+        let res = sqlx::query(
+            "INSERT INTO meeting_segments (meeting_id, offset_ms, text, created_at, speaker_cluster)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(meeting_id)
+        .bind(offset_ms)
+        .bind(text)
+        .bind(created_at)
+        .bind(speaker_cluster)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.last_insert_rowid())
+    }
+
+    /// Insert or update a speaker's display label for a meeting. The heuristic never overwrites a
+    /// label the user has edited (`is_named` set with a user edit); see [`Self::rename_speaker`].
+    pub async fn upsert_speaker(
+        &self,
+        meeting_id: i64,
+        cluster: i64,
+        label: &str,
+        is_self: bool,
+        is_named: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO meeting_speakers (meeting_id, cluster, label, is_self, is_named)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(meeting_id, cluster) DO UPDATE SET
+                 label = excluded.label,
+                 is_named = excluded.is_named
+             WHERE meeting_speakers.is_named = 0",
+        )
+        .bind(meeting_id)
+        .bind(cluster)
+        .bind(label)
+        .bind(is_self as i64)
+        .bind(is_named as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Apply a cluster remap (old → new) to a meeting's segments after a self-correction re-cluster,
+    /// so stored lines follow the merged speaker numbering. Done via a temporary offset so an
+    /// old→new that collides with another old id can't clobber it mid-pass.
+    pub async fn remap_segment_clusters(
+        &self,
+        meeting_id: i64,
+        remap: &[(i64, i64)],
+    ) -> Result<(), sqlx::Error> {
+        const OFFSET: i64 = 1_000_000; // guest ids are small; this parks new ids out of the way
+        let mut tx = self.pool.begin().await?;
+        for &(old, new) in remap {
+            sqlx::query(
+                "UPDATE meeting_segments SET speaker_cluster = $1
+                 WHERE meeting_id = $2 AND speaker_cluster = $3",
+            )
+            .bind(new + OFFSET)
+            .bind(meeting_id)
+            .bind(old)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE meeting_segments SET speaker_cluster = speaker_cluster - $1
+             WHERE meeting_id = $2 AND speaker_cluster >= $1",
+        )
+        .bind(OFFSET)
+        .bind(meeting_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// All speakers for a meeting, in cluster order (You first).
+    pub async fn list_speakers(&self, meeting_id: i64) -> Result<Vec<MeetingSpeakerRow>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingSpeakerRow>(
+            "SELECT meeting_id, cluster, label, is_self, is_named
+             FROM meeting_speakers WHERE meeting_id = $1 ORDER BY cluster ASC",
+        )
+        .bind(meeting_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Rename a speaker (user edit). Marks it `is_named` so the heuristic never overwrites it.
+    pub async fn rename_speaker(
+        &self,
+        meeting_id: i64,
+        cluster: i64,
+        label: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO meeting_speakers (meeting_id, cluster, label, is_self, is_named)
+             VALUES ($1, $2, $3, 0, 1)
+             ON CONFLICT(meeting_id, cluster) DO UPDATE SET label = excluded.label, is_named = 1",
+        )
+        .bind(meeting_id)
+        .bind(cluster)
+        .bind(label)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Finalize a meeting when capture stops: set its end time, duration, and word count
+    /// (recomputed from its segments so it is always consistent with the stored transcript).
+    pub async fn finish_meeting(&self, meeting_id: i64, duration_ms: i64) -> Result<(), sqlx::Error> {
+        let ended_at = chrono::Utc::now().timestamp();
+        let word_count: i64 = {
+            let texts = sqlx::query_as::<_, (String,)>(
+                "SELECT text FROM meeting_segments WHERE meeting_id = $1",
+            )
+            .bind(meeting_id)
+            .fetch_all(&self.pool)
+            .await?;
+            texts
+                .iter()
+                .map(|(t,)| t.split_whitespace().count() as i64)
+                .sum()
+        };
+        // Never let a resumed session shrink the stored length: the true duration is at least the
+        // last segment's offset (which, on resume, already includes the prior session's time).
+        let max_offset: i64 =
+            sqlx::query_as::<_, (Option<i64>,)>("SELECT MAX(offset_ms) FROM meeting_segments WHERE meeting_id = $1")
+                .bind(meeting_id)
+                .fetch_one(&self.pool)
+                .await?
+                .0
+                .unwrap_or(0);
+        let duration_ms = duration_ms.max(max_offset);
+        sqlx::query(
+            "UPDATE meetings SET ended_at = $1, duration_ms = $2, word_count = $3 WHERE id = $4",
+        )
+        .bind(ended_at)
+        .bind(duration_ms)
+        .bind(word_count)
+        .bind(meeting_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Meetings, newest first, for the Notetaker list.
+    pub async fn list_meetings(&self) -> Result<Vec<MeetingRow>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingRow>(
+            "SELECT id, title, started_at, ended_at, duration_ms, word_count, source, notes
+             FROM meetings ORDER BY started_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// A single meeting's header row.
+    pub async fn get_meeting(&self, id: i64) -> Result<Option<MeetingRow>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingRow>(
+            "SELECT id, title, started_at, ended_at, duration_ms, word_count, source, notes
+             FROM meetings WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Save a meeting's free-text notes.
+    pub async fn save_meeting_notes(&self, id: i64, notes: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE meetings SET notes = $1 WHERE id = $2")
+            .bind(notes)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Edit one transcript segment's text, and keep the meeting's word_count consistent.
+    pub async fn update_meeting_segment(&self, segment_id: i64, text: &str) -> Result<(), sqlx::Error> {
+        // Which meeting does this segment belong to? Needed to recompute its word count.
+        let meeting_id: Option<(i64,)> =
+            sqlx::query_as("SELECT meeting_id FROM meeting_segments WHERE id = $1")
+                .bind(segment_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        sqlx::query("UPDATE meeting_segments SET text = $1 WHERE id = $2")
+            .bind(text)
+            .bind(segment_id)
+            .execute(&self.pool)
+            .await?;
+        if let Some((mid,)) = meeting_id {
+            let texts = sqlx::query_as::<_, (String,)>(
+                "SELECT text FROM meeting_segments WHERE meeting_id = $1",
+            )
+            .bind(mid)
+            .fetch_all(&self.pool)
+            .await?;
+            let wc: i64 = texts.iter().map(|(t,)| t.split_whitespace().count() as i64).sum();
+            sqlx::query("UPDATE meetings SET word_count = $1 WHERE id = $2")
+                .bind(wc)
+                .bind(mid)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Delete one transcript segment (editing out a line).
+    pub async fn delete_meeting_segment(&self, segment_id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM meeting_segments WHERE id = $1")
+            .bind(segment_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// A meeting's transcript segments, in time order.
+    pub async fn list_meeting_segments(
+        &self,
+        meeting_id: i64,
+    ) -> Result<Vec<MeetingSegmentRow>, sqlx::Error> {
+        sqlx::query_as::<_, MeetingSegmentRow>(
+            "SELECT id, meeting_id, offset_ms, text, created_at, speaker_cluster
+             FROM meeting_segments WHERE meeting_id = $1 ORDER BY offset_ms ASC",
+        )
+        .bind(meeting_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Rename a meeting.
+    pub async fn rename_meeting(&self, id: i64, title: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE meetings SET title = $1 WHERE id = $2")
+            .bind(title)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Delete a meeting and its segments (segments cascade via the FK, but we delete explicitly
+    /// in case `PRAGMA foreign_keys` is off on an older connection).
+    pub async fn delete_meeting(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM meeting_segments WHERE meeting_id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM meetings WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 /// The "Your Year" recap (Insights, Stage 2). All fields derive from local transcript history.
@@ -581,6 +861,7 @@ pub struct SettingsRow {
     pub noise_suppression: i32,
     pub prompt_optimize_enabled: i32,
     pub prompt_optimize_hotkey: String,
+    pub fuzzy_dictionary: i32,
 }
 
 #[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -634,4 +915,40 @@ pub struct TranscriptRow {
     pub audio_ms: i64,
     pub model_used: Option<String>,
     pub created_at: i64,
+}
+
+/// A meeting (Notetaker). Header row; transcript lives in `MeetingSegmentRow`.
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct MeetingRow {
+    pub id: i64,
+    pub title: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub duration_ms: i64,
+    pub word_count: i64,
+    pub source: String,
+    pub notes: String,
+}
+
+/// One transcribed segment of a meeting, at `offset_ms` from its start.
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct MeetingSegmentRow {
+    pub id: i64,
+    pub meeting_id: i64,
+    pub offset_ms: i64,
+    pub text: String,
+    pub created_at: i64,
+    /// Speaker cluster: 0 = You (mic), 1..N = guests, -1 = unknown (pre-speaker-intelligence rows).
+    pub speaker_cluster: i64,
+}
+
+/// One speaker in a meeting: a stable cluster id and its current display label (a generic
+/// "Speaker N", a resolved real name, or a user edit).
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct MeetingSpeakerRow {
+    pub meeting_id: i64,
+    pub cluster: i64,
+    pub label: String,
+    pub is_self: i64,
+    pub is_named: i64,
 }

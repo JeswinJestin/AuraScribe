@@ -1,14 +1,15 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Mic, History, BookMarked, Scissors, BarChart3, Settings2, Flame, Sparkles } from 'lucide-react'
+import { Mic, History, BookMarked, Scissors, BarChart3, Settings2, Flame, Sparkles, AudioLines } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { Status, StreakInfo } from '@/lib/ipc'
 
-export type View = 'dictate' | 'history' | 'dictionary' | 'snippets' | 'insights' | 'recap' | 'settings'
+export type View = 'dictate' | 'notetaker' | 'history' | 'dictionary' | 'snippets' | 'insights' | 'recap' | 'settings'
 
 const NAV: { id: View; label: string; icon: typeof Mic }[] = [
   { id: 'dictate', label: 'Dictate', icon: Mic },
+  { id: 'notetaker', label: 'Notetaker', icon: AudioLines },
   { id: 'history', label: 'History', icon: History },
   { id: 'dictionary', label: 'Words', icon: BookMarked },
   { id: 'snippets', label: 'Snippets', icon: Scissors },

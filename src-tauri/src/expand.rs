@@ -21,7 +21,17 @@
 use crate::db::{DictionaryRow, SnippetRow};
 
 /// Apply the personal dictionary then snippet expansions to `text`.
-pub fn apply(text: &str, dictionary: &[DictionaryRow], snippets: &[SnippetRow]) -> String {
+///
+/// When `fuzzy` is on, an extra conservative pass (`fuzzy_correct`) also fixes **near-miss**
+/// mishears of the user's own dictionary terms — e.g. "cubernetties" → "Kubernetes" — not just
+/// exact matches. It is opt-in because fuzzy matching can, in principle, rewrite an unrelated word
+/// that happens to be close to a dictionary term; off by default, normal dictation is untouched.
+pub fn apply(
+    text: &str,
+    dictionary: &[DictionaryRow],
+    snippets: &[SnippetRow],
+    fuzzy: bool,
+) -> String {
     let mut out = text.to_string();
 
     for entry in dictionary {
@@ -32,6 +42,11 @@ pub fn apply(text: &str, dictionary: &[DictionaryRow], snippets: &[SnippetRow]) 
             entry.case_sensitive != 0,
             entry.whole_word != 0,
         );
+    }
+
+    // Catch near-misses of the user's own vocabulary that the exact pass above left behind.
+    if fuzzy {
+        out = fuzzy_correct(&out, dictionary);
     }
 
     // Longer triggers first, so "my work email" wins over "my email" when both exist and
@@ -104,6 +119,125 @@ fn replace_phrase(
     result
 }
 
+/// Maximum edit distance allowed for a near-miss, by the dictionary term's length. Tight on short
+/// words (collisions are cheap there) and never above 2, so a correction is always a *small* fix.
+fn fuzzy_threshold(term_len: usize) -> usize {
+    match term_len {
+        0..=4 => 0, // too short to fuzzy-match safely — exact pass only
+        5..=7 => 1,
+        _ => 2,
+    }
+}
+
+/// Conservative near-miss correction toward the user's own dictionary terms.
+///
+/// For each alphabetic token the exact pass didn't already fix, find eligible dictionary terms
+/// (whole-word, case-insensitive, ≥5 chars, alphabetic) whose lowercased form is within
+/// `fuzzy_threshold` edits of the token, with the **same first letter** and a length within ±2.
+/// The token is replaced only when exactly one *distinct* replacement wins — ambiguous or tied
+/// matches are left alone, so a wrong guess never silently overwrites the user's words.
+fn fuzzy_correct(text: &str, dictionary: &[DictionaryRow]) -> String {
+    let eligible: Vec<(String, &str)> = dictionary
+        .iter()
+        .filter(|e| e.whole_word != 0 && e.case_sensitive == 0)
+        .map(|e| (e.word.to_lowercase(), e.replacement.as_str()))
+        .filter(|(w, _)| w.chars().count() >= 5 && w.chars().all(|c| c.is_alphabetic()))
+        .collect();
+    if eligible.is_empty() {
+        return text.to_string();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+
+    // Flush the current alphabetic token, correcting it if a single clear near-miss match exists.
+    let flush = |token: &mut String, out: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        let lower = token.to_lowercase();
+        let tlen = lower.chars().count();
+        let mut best: Option<(usize, &str)> = None; // (distance, replacement)
+        let mut tied = false;
+        for (word, replacement) in &eligible {
+            let wlen = word.chars().count();
+            if lower == *word {
+                // Exact (e.g. replacement equals term, or already-correct) — leave as typed.
+                best = None;
+                tied = false;
+                break;
+            }
+            if word.chars().next() != lower.chars().next() {
+                continue;
+            }
+            let max = fuzzy_threshold(wlen);
+            if max == 0 || tlen.abs_diff(wlen) > 2 {
+                continue;
+            }
+            if let Some(d) = levenshtein_bounded(&lower, word, max) {
+                match best {
+                    None => best = Some((d, replacement)),
+                    Some((bd, br)) => {
+                        if d < bd {
+                            best = Some((d, replacement));
+                            tied = false;
+                        } else if d == bd && br != *replacement {
+                            tied = true; // two different terms equally close — don't guess
+                        }
+                    }
+                }
+            }
+        }
+        match best {
+            Some((_, replacement)) if !tied => out.push_str(replacement),
+            _ => out.push_str(token),
+        }
+        token.clear();
+    };
+
+    for ch in text.chars() {
+        if ch.is_alphabetic() {
+            token.push(ch);
+        } else {
+            flush(&mut token, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
+/// Levenshtein distance, early-exiting once it provably exceeds `max` (returns `None` then). Keeps
+/// the fuzzy pass cheap: it only ever runs the full DP on tokens already close in length.
+pub(crate) fn levenshtein_bounded(a: &str, b: &str, max: usize) -> Option<usize> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > max {
+        return None;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        let mut row_min = curr[0];
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
+            row_min = row_min.min(curr[j + 1]);
+        }
+        if row_min > max {
+            return None; // whole row already past the budget — no path can recover
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    let d = prev[b.len()];
+    if d <= max {
+        Some(d)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,7 +267,7 @@ mod tests {
     fn dictionary_corrects_a_whole_word_case_insensitively() {
         let d = vec![dict("kubernetes", "Kubernetes", false, true)];
         assert_eq!(
-            apply("We deployed kubernetes today.", &d, &[]),
+            apply("We deployed kubernetes today.", &d, &[], false),
             "We deployed Kubernetes today."
         );
     }
@@ -142,7 +276,7 @@ mod tests {
     fn dictionary_whole_word_does_not_match_inside_another_word() {
         let d = vec![dict("cs", "CS", false, true)];
         // Must not turn "physics" into "physiCS".
-        assert_eq!(apply("I study physics and cs.", &d, &[]), "I study physics and CS.");
+        assert_eq!(apply("I study physics and cs.", &d, &[], false), "I study physics and CS.");
     }
 
     #[test]
@@ -150,7 +284,7 @@ mod tests {
         let s = vec![snip("my email", "jeswin@example.com")];
         // Case-insensitive whole-phrase match, wherever it appears in the sentence.
         assert_eq!(
-            apply("Reach me at my email please.", &[], &s),
+            apply("Reach me at my email please.", &[], &s, false),
             "Reach me at jeswin@example.com please."
         );
     }
@@ -159,7 +293,7 @@ mod tests {
     fn snippet_expands_every_occurrence() {
         let s = vec![snip("my email", "jeswin@example.com")];
         assert_eq!(
-            apply("My email is my email.", &[], &s),
+            apply("My email is my email.", &[], &s, false),
             "jeswin@example.com is jeswin@example.com."
         );
     }
@@ -170,7 +304,7 @@ mod tests {
             snip("my email", "short@example.com"),
             snip("my work email", "work@example.com"),
         ];
-        assert_eq!(apply("Send my work email please.", &[], &s), "Send work@example.com please.");
+        assert_eq!(apply("Send my work email please.", &[], &s, false), "Send work@example.com please.");
     }
 
     #[test]
@@ -178,7 +312,7 @@ mod tests {
         // A dictionary rule for "google" must not rewrite the inside of a snippet expansion.
         let d = vec![dict("google", "Google", false, true)];
         let s = vec![snip("my site", "google.com")];
-        assert_eq!(apply("Visit my site.", &d, &s), "Visit google.com.");
+        assert_eq!(apply("Visit my site.", &d, &s, false), "Visit google.com.");
     }
 
     #[test]
@@ -186,13 +320,67 @@ mod tests {
         let d = vec![dict("IT", "information technology", true, true)];
         // "it" (lowercase) is left alone; only the exact-case "IT" is expanded.
         assert_eq!(
-            apply("it is an IT problem.", &d, &[]),
+            apply("it is an IT problem.", &d, &[], false),
             "it is an information technology problem."
         );
     }
 
     #[test]
     fn empty_inputs_are_a_no_op() {
-        assert_eq!(apply("nothing to do here.", &[], &[]), "nothing to do here.");
+        assert_eq!(apply("nothing to do here.", &[], &[], false), "nothing to do here.");
+    }
+
+    // --- fuzzy near-miss correction (opt-in) -----------------------------------------------------
+
+    #[test]
+    fn fuzzy_corrects_a_near_miss_of_a_dictionary_term() {
+        let d = vec![dict("kubernetes", "Kubernetes", false, true)];
+        // One/two-character mishears of a long term get fixed only when fuzzy is on.
+        assert_eq!(
+            apply("we deployed kuberneties today.", &d, &[], true),
+            "we deployed Kubernetes today."
+        );
+        // Off by default: the mishear is left untouched.
+        assert_eq!(
+            apply("we deployed kuberneties today.", &d, &[], false),
+            "we deployed kuberneties today."
+        );
+    }
+
+    #[test]
+    fn fuzzy_preserves_punctuation_and_other_words() {
+        let d = vec![dict("postgres", "Postgres", false, true)];
+        assert_eq!(apply("use postgress, please.", &d, &[], true), "use Postgres, please.");
+    }
+
+    #[test]
+    fn fuzzy_does_not_touch_far_words() {
+        let d = vec![dict("kubernetes", "Kubernetes", false, true)];
+        // "container" is nowhere near "kubernetes" — must be left alone.
+        assert_eq!(apply("a container ran.", &d, &[], true), "a container ran.");
+    }
+
+    #[test]
+    fn fuzzy_skips_short_terms() {
+        // 4-char term: too short to fuzzy-match (threshold 0), so "reactx" is NOT turned into React.
+        let d = vec![dict("sql", "SQL", false, true)];
+        assert_eq!(apply("the sqm server.", &d, &[], true), "the sqm server.");
+    }
+
+    #[test]
+    fn fuzzy_leaves_ambiguous_ties_alone() {
+        // Two different replacements equally close (distance 1) to "fooo" → don't guess.
+        let d = vec![
+            dict("foob", "FooB", false, true),
+            dict("fooc", "FooC", false, true),
+        ];
+        assert_eq!(apply("the fooo thing.", &d, &[], true), "the fooo thing.");
+    }
+
+    #[test]
+    fn fuzzy_respects_distance_budget() {
+        // "kubernetes" (len 10) allows up to 2 edits; a 3-edit mangle is left alone.
+        let d = vec![dict("kubernetes", "Kubernetes", false, true)];
+        assert_eq!(apply("kuberxyzes ran.", &d, &[], true), "kuberxyzes ran.");
     }
 }

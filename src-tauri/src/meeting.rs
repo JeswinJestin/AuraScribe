@@ -1,0 +1,1451 @@
+//! Notetaker — local meeting transcription.
+//!
+//! Records **the meeting you hear** (system output, via WASAPI loopback) **plus your microphone**,
+//! transcribes the mix **entirely on-device** with the model already loaded for dictation, and
+//! stores a timestamped transcript. **No cloud call, no account, no bundled summary model** — the
+//! whole point of AuraScribe. Design + scope: `docs/superpowers/specs/2026-10-13-notetaker-design.md`.
+//!
+//! ## Isolation
+//! This module never touches the dictation hot path (`commands::start_recording` / `run_chunker`).
+//! Meetings have their own [`MeetingState`], their own capture threads, and their own chunker, so a
+//! bug here cannot regress daily dictation.
+//!
+//! ## Platform honesty
+//! System-audio loopback is **Windows-only** in this MVP (WASAPI). macOS has no public loopback API
+//! without a virtual device; Linux needs a PulseAudio/PipeWire monitor source. Off Windows,
+//! [`start_meeting`] returns an explicit error rather than silently capturing nothing — the
+//! "don't fake success on unimplemented platforms" rule.
+//!
+//! ## Verification status
+//! The orchestration, mixing, and DB writes are ordinary Rust (unit-tested where pure). The WASAPI
+//! loopback COM path **cannot be exercised from CI or a headless sandbox** — it needs a real audio
+//! session. It compiles; its runtime correctness is confirmed by the owner running a real call and
+//! checking `aurascribe.log` (which logs the detected loopback format/rate). Treat it as unverified
+//! until that run, exactly as the macOS/Linux dictation audio paths are labelled.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// How often the meeting chunker drains the captured audio and transcribes it. Short enough that
+/// the live transcript feels real-time (a segment appears every few seconds), long enough that each
+/// window has a usable utterance. Moonshine (the recommended engine) is short-form optimized, so a
+/// few seconds per window costs little accuracy.
+const CHUNK_SECS: u64 = 6;
+
+/// Target rate for ASR (same 16 kHz mono the dictation path feeds Whisper/sherpa).
+const ASR_RATE: u32 = 16_000;
+
+/// All state for an in-progress (or idle) meeting capture. Separate from the dictation state.
+#[derive(Clone)]
+pub struct MeetingState {
+    /// True while a meeting is being captured.
+    pub recording: Arc<AtomicBool>,
+    /// True while the meeting is paused — capture threads stop appending audio, so nothing is
+    /// transcribed, but the meeting stays open until Stop. Resume clears it.
+    pub paused: Arc<AtomicBool>,
+    /// The DB id of the meeting currently (or last) being recorded.
+    pub meeting_id: Arc<Mutex<Option<i64>>>,
+    /// When the current meeting started, for elapsed/offset computation.
+    pub started: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Native OS capture threads (loopback + mic). Joined on stop.
+    pub threads: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    /// The async chunker; awaited on stop so the tail is flushed.
+    pub chunk_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// System-output (loopback) audio, mono, at `system_rate`.
+    pub system_buf: Arc<Mutex<Vec<f32>>>,
+    pub system_rate: Arc<Mutex<u32>>,
+    /// Microphone audio, mono, at `mic_rate`.
+    pub mic_buf: Arc<Mutex<Vec<f32>>>,
+    pub mic_rate: Arc<Mutex<u32>>,
+}
+
+impl Default for MeetingState {
+    fn default() -> Self {
+        Self {
+            recording: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+            meeting_id: Arc::new(Mutex::new(None)),
+            started: Arc::new(Mutex::new(None)),
+            threads: Arc::new(Mutex::new(Vec::new())),
+            chunk_task: Arc::new(Mutex::new(None)),
+            system_buf: Arc::new(Mutex::new(Vec::new())),
+            system_rate: Arc::new(Mutex::new(0)),
+            mic_buf: Arc::new(Mutex::new(Vec::new())),
+            mic_rate: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+// --- Pure helpers (unit-tested) ------------------------------------------------------------------
+
+/// Down-mix interleaved multi-channel samples to mono by averaging each frame.
+pub fn downmix_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return interleaved.to_vec();
+    }
+    interleaved
+        .chunks(channels)
+        .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
+        .collect()
+}
+
+/// Mix two mono streams (system + mic) into one, summing sample-by-sample and soft-clamping to
+/// [-1, 1]. The shorter stream is treated as silence past its end, so one source being quiet (or
+/// absent) never truncates the other. Both inputs must already be at the same sample rate.
+pub fn mix_streams(a: &[f32], b: &[f32]) -> Vec<f32> {
+    let n = a.len().max(b.len());
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0);
+        out.push(s.clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// Resample a mono stream to 16 kHz for ASR, guarding the empty / unknown-rate cases so a source
+/// that never produced audio contributes nothing instead of panicking.
+fn to_asr_rate(mono: &[f32], rate: u32) -> Vec<f32> {
+    if mono.is_empty() || rate == 0 {
+        return Vec::new();
+    }
+    crate::audio::resample_linear(mono, rate, ASR_RATE)
+}
+
+// --- Capture: microphone (reuses the proven cpal path) -------------------------------------------
+
+/// Capture the default (or configured) microphone into `buf` as mono f32 at the device's native
+/// rate, until `recording` goes false. Mirrors `commands::start_recording`'s format-agnostic,
+/// no-drop capture, but writes into the meeting's own buffer.
+fn capture_mic(
+    buf: Arc<Mutex<Vec<f32>>>,
+    rate_out: Arc<Mutex<u32>>,
+    recording: Arc<AtomicBool>,
+    mic_device: Option<String>,
+) {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let host = cpal::default_host();
+    let device = mic_device
+        .as_deref()
+        .and_then(|name| {
+            host.input_devices()
+                .ok()?
+                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+        })
+        .or_else(|| host.default_input_device());
+    let device = match device {
+        Some(d) => d,
+        None => {
+            tracing::warn!("Meeting: no input device for mic capture");
+            return;
+        }
+    };
+    let config = match device.default_input_config() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Meeting: failed to get mic config: {}", e);
+            return;
+        }
+    };
+    let sample_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let sample_format = config.sample_format();
+    if let Ok(mut r) = rate_out.try_lock() {
+        *r = sample_rate;
+    }
+    tracing::info!(
+        "Meeting mic capture: format={:?}, {}Hz, {}ch",
+        sample_format, sample_rate, channels
+    );
+    let stream_config: cpal::StreamConfig = config.into();
+
+    fn build<T>(
+        device: &cpal::Device,
+        cfg: &cpal::StreamConfig,
+        buf: Arc<Mutex<Vec<f32>>>,
+        channels: usize,
+    ) -> Result<cpal::Stream, cpal::BuildStreamError>
+    where
+        T: cpal::SizedSample,
+        f32: cpal::FromSample<T>,
+    {
+        use cpal::traits::DeviceTrait;
+        use cpal::Sample;
+        let mut local: Vec<f32> = Vec::new();
+        device.build_input_stream(
+            cfg,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                if channels > 1 {
+                    for frame in data.chunks(channels) {
+                        let sum: f32 = frame.iter().map(|s| f32::from_sample(*s)).sum();
+                        local.push(sum / channels as f32);
+                    }
+                } else {
+                    local.extend(data.iter().map(|s| f32::from_sample(*s)));
+                }
+                if let Ok(mut b) = buf.try_lock() {
+                    b.append(&mut local);
+                }
+            },
+            |err| tracing::warn!("Meeting mic stream error: {}", err),
+            None,
+        )
+    }
+
+    let stream = match sample_format {
+        cpal::SampleFormat::F32 => build::<f32>(&device, &stream_config, buf, channels),
+        cpal::SampleFormat::I16 => build::<i16>(&device, &stream_config, buf, channels),
+        cpal::SampleFormat::U16 => build::<u16>(&device, &stream_config, buf, channels),
+        other => {
+            tracing::warn!("Meeting mic: unsupported sample format {:?}", other);
+            return;
+        }
+    };
+    let stream = match stream {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Meeting mic: failed to build stream: {}", e);
+            return;
+        }
+    };
+    if stream.play().is_err() {
+        tracing::warn!("Meeting mic: failed to start stream");
+        return;
+    }
+    while recording.load(Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+// --- Capture: system output (WASAPI loopback, Windows only) --------------------------------------
+
+/// Capture the default render endpoint's output (what the user hears) via WASAPI loopback into
+/// `buf` as mono f32 at the endpoint's mix rate, until `recording` goes false.
+///
+/// **Unverified from the sandbox** — this is COM audio code that needs a real audio session. It
+/// compiles and follows the documented WASAPI loopback sequence; the owner confirms it on a real
+/// call (the detected format/rate is logged). A failure here is logged and leaves the meeting with
+/// mic-only audio rather than crashing.
+#[cfg(target_os = "windows")]
+fn capture_system_loopback(
+    buf: Arc<Mutex<Vec<f32>>>,
+    rate_out: Arc<Mutex<u32>>,
+    recording: Arc<AtomicBool>,
+) {
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+        WAVEFORMATEXTENSIBLE,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+        COINIT_MULTITHREADED,
+    };
+
+    const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
+    const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+    // ~200 ms buffer, in 100-ns units (REFERENCE_TIME).
+    const BUFFER_HNS: i64 = 2_000_000;
+
+    unsafe {
+        // The capture runs on its own thread; initialize COM for it (MTA so the loopback service
+        // is callable from this worker). Ignore RPC_E_CHANGED_MODE if COM is already up.
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let result = (|| -> Result<(), String> {
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                    .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {e}"))?;
+            let device = enumerator
+                .GetDefaultAudioEndpoint(eRender, eConsole)
+                .map_err(|e| format!("GetDefaultAudioEndpoint(render) failed: {e}"))?;
+            let audio_client: IAudioClient = device
+                .Activate(CLSCTX_ALL, None)
+                .map_err(|e| format!("Activate(IAudioClient) failed: {e}"))?;
+
+            let pwfx = audio_client
+                .GetMixFormat()
+                .map_err(|e| format!("GetMixFormat failed: {e}"))?;
+            if pwfx.is_null() {
+                return Err("GetMixFormat returned null".into());
+            }
+            let wfx = *pwfx;
+            let channels = wfx.nChannels as usize;
+            let rate = wfx.nSamplesPerSec;
+            let bits = wfx.wBitsPerSample;
+
+            // Determine whether the mix format delivers 32-bit float (the usual case) or 16-bit PCM.
+            // For WAVE_FORMAT_EXTENSIBLE, the real format is in the SubFormat GUID, whose Data1 is
+            // the classic format tag (1 = PCM, 3 = IEEE float) — so we can read it without importing
+            // the KSDATAFORMAT_SUBTYPE_* constants.
+            let is_float = match wfx.wFormatTag {
+                WAVE_FORMAT_IEEE_FLOAT => true,
+                WAVE_FORMAT_EXTENSIBLE => {
+                    let ext = pwfx as *const WAVEFORMATEXTENSIBLE;
+                    (*ext).SubFormat.data1 == 3
+                }
+                _ => false, // treated as PCM below
+            };
+
+            audio_client
+                .Initialize(
+                    AUDCLNT_SHAREMODE_SHARED,
+                    AUDCLNT_STREAMFLAGS_LOOPBACK,
+                    BUFFER_HNS,
+                    0,
+                    pwfx,
+                    None,
+                )
+                .map_err(|e| format!("IAudioClient::Initialize(loopback) failed: {e}"))?;
+
+            let capture: IAudioCaptureClient = audio_client
+                .GetService()
+                .map_err(|e| format!("GetService(IAudioCaptureClient) failed: {e}"))?;
+
+            if let Ok(mut r) = rate_out.try_lock() {
+                *r = rate;
+            }
+            tracing::info!(
+                "Meeting loopback capture: {}Hz, {}ch, {}bit, float={}",
+                rate, channels, bits, is_float
+            );
+
+            audio_client
+                .Start()
+                .map_err(|e| format!("IAudioClient::Start failed: {e}"))?;
+
+            let bytes_per_sample = (bits / 8) as usize;
+            let mut local: Vec<f32> = Vec::new();
+
+            while recording.load(Ordering::Relaxed) {
+                // WASAPI delivers in packets; drain all available, then wait a slice of the buffer.
+                loop {
+                    let packet = capture
+                        .GetNextPacketSize()
+                        .map_err(|e| format!("GetNextPacketSize failed: {e}"))?;
+                    if packet == 0 {
+                        break;
+                    }
+                    let mut p_data: *mut u8 = std::ptr::null_mut();
+                    let mut num_frames: u32 = 0;
+                    let mut flags: u32 = 0;
+                    capture
+                        .GetBuffer(&mut p_data, &mut num_frames, &mut flags, None, None)
+                        .map_err(|e| format!("GetBuffer failed: {e}"))?;
+
+                    let frames = num_frames as usize;
+                    let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
+                    if silent || p_data.is_null() {
+                        // A silent packet still advances time; push zeros so mic/system stay aligned.
+                        local.extend(std::iter::repeat(0.0).take(frames));
+                    } else {
+                        let total = frames * channels;
+                        if is_float && bytes_per_sample == 4 {
+                            let samples = std::slice::from_raw_parts(p_data as *const f32, total);
+                            local.extend(downmix_mono(samples, channels));
+                        } else if bytes_per_sample == 2 {
+                            let samples = std::slice::from_raw_parts(p_data as *const i16, total);
+                            let as_f32: Vec<f32> =
+                                samples.iter().map(|s| *s as f32 / 32768.0).collect();
+                            local.extend(downmix_mono(&as_f32, channels));
+                        } else {
+                            // Unexpected format: advance time with silence rather than garbage.
+                            local.extend(std::iter::repeat(0.0).take(frames));
+                        }
+                    }
+
+                    capture
+                        .ReleaseBuffer(num_frames)
+                        .map_err(|e| format!("ReleaseBuffer failed: {e}"))?;
+                }
+
+                if !local.is_empty() {
+                    if let Ok(mut b) = buf.try_lock() {
+                        b.append(&mut local);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+
+            let _ = audio_client.Stop();
+            CoTaskMemFree(Some(pwfx as *const _ as *mut _));
+            Ok(())
+        })();
+
+        if let Err(e) = result {
+            tracing::warn!("Meeting loopback capture failed ({e}); meeting will have mic audio only");
+        }
+        CoUninitialize();
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn capture_system_loopback(
+    _buf: Arc<Mutex<Vec<f32>>>,
+    _rate_out: Arc<Mutex<u32>>,
+    _recording: Arc<AtomicBool>,
+) {
+    // System-audio loopback is Windows-only in this MVP; `start_meeting` refuses off Windows, so
+    // this is never reached. Present so the module compiles on all platforms.
+}
+
+// --- Orchestration -------------------------------------------------------------------------------
+
+/// Transcribe one 16 kHz mono window with the loaded model, returning trimmed text (or None).
+fn transcribe_window(asr: &crate::engine::Asr, samples: &[f32], language: &str) -> Option<String> {
+    let trimmed = crate::chunking::trim_silence(samples, ASR_RATE);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let trimmed = crate::chunking::normalize_gain(&trimmed);
+    let lang = if language == "auto" { None } else { Some(language) };
+    match asr.transcribe(&trimmed, lang) {
+        Ok(t) if !t.trim().is_empty() => Some(t.trim().to_string()),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!("Meeting chunk transcription failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Result of one chunker tick: the transcribed text, which channel carried the window (Layer A),
+/// and the 16 kHz guest audio (for Layer B's voice fingerprint, computed in the caller where the
+/// embedder lives).
+struct Tick {
+    text: String,
+    channel: crate::diarize::Channel,
+    guest16: Vec<f32>,
+}
+
+/// One drain-and-transcribe tick: take everything captured so far from both sources, resample,
+/// attribute the window to a channel from the two streams' energy, mix, and transcribe.
+async fn process_tick(
+    st: &MeetingState,
+    asr: &Arc<crate::engine::Asr>,
+    language: &str,
+) -> Option<Tick> {
+    let (sys, sys_rate, mic, mic_rate) = {
+        let mut sb = st.system_buf.lock().await;
+        let mut mb = st.mic_buf.lock().await;
+        let sr = *st.system_rate.lock().await;
+        let mr = *st.mic_rate.lock().await;
+        (std::mem::take(&mut *sb), sr, std::mem::take(&mut *mb), mr)
+    };
+    if sys.is_empty() && mic.is_empty() {
+        return None;
+    }
+    let sys16 = to_asr_rate(&sys, sys_rate);
+    let mic16 = to_asr_rate(&mic, mic_rate);
+    // Layer A: which channel carries this window. "You" when the mic dominates; otherwise a guest.
+    let channel = crate::diarize::attribute_channel(
+        crate::diarize::rms(&mic16),
+        crate::diarize::rms(&sys16),
+    );
+    // Transcribe the full mixed window (so no words are lost regardless of who spoke).
+    let mixed = mix_streams(&sys16, &mic16);
+    if mixed.is_empty() {
+        return None;
+    }
+    let asr = asr.clone();
+    let lang = language.to_string();
+    let text = tokio::task::spawn_blocking(move || transcribe_window(&asr, &mixed, &lang))
+        .await
+        .ok()
+        .flatten()?;
+    Some(Tick { text, channel, guest16: sys16 })
+}
+
+// --- Tauri commands ------------------------------------------------------------------------------
+
+use tauri::{command, AppHandle, Emitter, Manager, State};
+
+/// Returned by `meeting_status` so the UI can poll authoritative state (events are the fast path,
+/// not the only path — the CLAUDE.md rule).
+#[derive(serde::Serialize)]
+pub struct MeetingStatus {
+    pub recording: bool,
+    pub paused: bool,
+    pub meeting_id: Option<i64>,
+    pub elapsed_ms: i64,
+}
+
+/// Emitted (`meeting-segment`) each time a window is transcribed during capture, so the UI can grow
+/// the transcript live instead of only after Stop.
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingSegmentEvent {
+    pub meeting_id: i64,
+    pub offset_ms: i64,
+    pub text: String,
+    pub speaker_cluster: i64,
+}
+
+/// One speaker in the live meeting, for the `meeting-speakers` event and `get_meeting`.
+#[derive(Clone, serde::Serialize)]
+pub struct SpeakerInfo {
+    pub cluster: i64,
+    pub label: String,
+    pub is_self: bool,
+}
+
+/// Emitted (`meeting-speakers`) whenever the speaker set or any label changes (a new speaker
+/// appears, or a name resolves), so the UI relabels every line of a cluster live and retroactively.
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingSpeakersEvent {
+    pub meeting_id: i64,
+    pub speakers: Vec<SpeakerInfo>,
+}
+
+/// Emitted (`meeting-remap`) after a self-correction re-cluster merges/renumbers guest speakers, so
+/// the UI can rewrite its live lines' cluster ids to match (old cluster id → new cluster id pairs).
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingRemapEvent {
+    pub meeting_id: i64,
+    pub remap: Vec<(i64, i64)>,
+}
+
+/// Emitted (`meeting-partial`) by the streaming engine as a line is being spoken — the growing,
+/// not-yet-final hypothesis. An empty `text` clears the partial (the line just finalized).
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingPartialEvent {
+    pub meeting_id: i64,
+    pub text: String,
+    pub speaker_cluster: i64,
+}
+
+/// Fingerprint a guest window off the async runtime (the FFI call is blocking). `None` when there's
+/// no embedder loaded or the window can't be embedded.
+async fn embed_guest(
+    embedder: &Arc<std::sync::Mutex<Option<crate::embedding::SpeakerEmbedder>>>,
+    audio: Vec<f32>,
+) -> Option<Vec<f32>> {
+    let e = embedder.clone();
+    tokio::task::spawn_blocking(move || {
+        e.lock().ok().and_then(|mut g| g.as_mut().and_then(|x| x.compute(&audio)))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Re-resolve names over the turns so far and, if the speaker set or any label changed, persist and
+/// emit `meeting-speakers` so the UI relabels live. Shared by the chunked and streaming loops.
+async fn sync_speakers(
+    db: &Arc<Mutex<crate::db::Database>>,
+    app: &AppHandle,
+    meeting_id: i64,
+    turns: &[crate::diarize::Turn],
+    last_labels: &mut Vec<(i64, String)>,
+) {
+    let (speakers, resolved) = compute_speakers(turns);
+    let sig: Vec<(i64, String)> = speakers.iter().map(|s| (s.cluster, s.label.clone())).collect();
+    if sig != *last_labels {
+        {
+            let db = db.lock().await;
+            for s in &speakers {
+                let is_named = resolved.contains_key(&s.cluster);
+                if let Err(e) = db
+                    .upsert_speaker(meeting_id, s.cluster, &s.label, s.is_self, is_named)
+                    .await
+                {
+                    tracing::warn!("Meeting: failed to upsert speaker: {}", e);
+                }
+            }
+        }
+        app.emit("meeting-speakers", MeetingSpeakersEvent { meeting_id, speakers })
+            .ok();
+        *last_labels = sig;
+    }
+}
+
+// Layer B tuning (cosine on L2-normalized TitaNet embeddings). Defaults from common practice;
+// tune on-device. JOIN: min similarity to attach to an existing guest rather than open a new one.
+const JOIN_THRESHOLD: f32 = 0.55;
+// MERGE: the self-correction re-cluster fuses guest clusters at least this similar.
+const MERGE_THRESHOLD: f32 = 0.62;
+// Re-cluster every this-many ticks (~CHUNK_SECS each) to fix drift mid-meeting.
+const RECLUSTER_EVERY: u32 = 5;
+
+/// Build the current speaker list from the attributed turns so far: "You" for the mic cluster, a
+/// resolved real name for any guest the conversation has confidently named, else "Speaker N".
+fn compute_speakers(turns: &[crate::diarize::Turn]) -> (Vec<SpeakerInfo>, std::collections::HashMap<i64, String>) {
+    use std::collections::BTreeSet;
+    let resolved = crate::diarize::resolve_speaker_names(turns);
+    let clusters: BTreeSet<i64> = turns.iter().map(|t| t.cluster).collect();
+    let mut out = Vec::new();
+    let mut guest_ord = 0;
+    for c in clusters {
+        if c == crate::diarize::SELF_CLUSTER {
+            out.push(SpeakerInfo { cluster: c, label: "You".to_string(), is_self: true });
+        } else {
+            guest_ord += 1;
+            let label = resolved
+                .get(&c)
+                .cloned()
+                .unwrap_or_else(|| format!("Speaker {guest_ord}"));
+            out.push(SpeakerInfo { cluster: c, label, is_self: false });
+        }
+    }
+    (out, resolved)
+}
+
+/// Emitted (`meeting-finished`) after Stop once the meeting is finalized and (maybe) auto-renamed,
+/// so the UI refreshes its title in the list.
+#[derive(Clone, serde::Serialize)]
+pub struct MeetingFinishedEvent {
+    pub meeting_id: i64,
+    pub title: String,
+}
+
+/// Derive a human title from the first real speech in a meeting, **locally, with no model** — the
+/// first sentence (or first ~8 words), tidied and capped. Returns `None` when there is no usable
+/// text (keeps the default "Untitled meeting"). A smarter, LLM-generated title is a later opt-in.
+pub fn derive_title(segment_texts: &[String]) -> Option<String> {
+    let joined = segment_texts.join(" ");
+    let trimmed = joined.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Prefer the first sentence; fall back to the first chunk of words.
+    let first = trimmed
+        .split(|c| c == '.' || c == '?' || c == '!')
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or(trimmed);
+    let words: Vec<&str> = first.split_whitespace().take(8).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut title = words.join(" ");
+    // Cap length so the list stays tidy; trim trailing punctuation/commas.
+    const MAX: usize = 60;
+    if title.chars().count() > MAX {
+        title = title.chars().take(MAX).collect::<String>().trim_end().to_string();
+        title.push('…');
+    }
+    let title = title.trim_end_matches([',', ';', ':', '-']).trim().to_string();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+/// A meeting plus its transcript segments, for the detail view.
+#[derive(serde::Serialize)]
+pub struct MeetingDetail {
+    pub meeting: crate::db::MeetingRow,
+    pub segments: Vec<crate::db::MeetingSegmentRow>,
+    pub speakers: Vec<crate::db::MeetingSpeakerRow>,
+}
+
+/// Start capturing + transcribing a meeting. System-audio loopback is Windows-only in this MVP.
+/// When `resume_id` is set, continues an existing (finished) meeting instead of creating a new one:
+/// new segments append after its transcript and speaker naming carries over.
+#[command]
+pub async fn start_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+    title: Option<String>,
+    resume_id: Option<i64>,
+) -> Result<i64, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&state, &title, &app, &resume_id);
+        return Err(
+            "Meeting capture records system audio (what you hear in the call), which is only \
+             supported on Windows right now. It is coming to macOS/Linux later."
+                .to_string(),
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        {
+            let status = state.status.lock().await;
+            if !status.is_model_loaded {
+                return Err("No voice model loaded. Load one in Settings first.".to_string());
+            }
+        }
+        if state.meeting.recording.load(Ordering::Relaxed) {
+            return Err("A meeting is already being recorded.".to_string());
+        }
+
+        let (mic_device, language) = {
+            let db = state.db.lock().await;
+            crate::commands::load_settings_from_db(&db)
+                .await
+                .map(|s| (s.mic_device, s.language))
+                .unwrap_or((None, "en".to_string()))
+        };
+
+        // Fresh meeting, or resume an existing one. When resuming, seed the naming turns and the
+        // continuing time offset from the stored transcript so new lines follow the old ones.
+        let (meeting_id, offset_base_ms, seed_turns, guest_base) = if let Some(id) = resume_id {
+            let db = state.db.lock().await;
+            let meeting = db
+                .get_meeting(id)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Meeting to resume not found".to_string())?;
+            let segs = db.list_meeting_segments(id).await.map_err(|e| e.to_string())?;
+            let base = segs.iter().map(|s| s.offset_ms).max().unwrap_or(0).max(meeting.duration_ms)
+                + CHUNK_SECS as i64 * 1000;
+            let turns: Vec<crate::diarize::Turn> = segs
+                .iter()
+                .map(|s| crate::diarize::Turn { cluster: s.speaker_cluster, text: s.text.clone() })
+                .collect();
+            // Continue guest numbering above the highest existing guest so a new voice can't reuse
+            // (and visually merge with) an old speaker's id.
+            let gbase = segs.iter().map(|s| s.speaker_cluster).max().unwrap_or(0).max(0) + 1;
+            (id, base, turns, gbase)
+        } else {
+            let title = title.unwrap_or_else(|| "Untitled meeting".to_string());
+            let id = {
+                let db = state.db.lock().await;
+                db.create_meeting(&title, "system+mic")
+                    .await
+                    .map_err(|e| format!("Could not create meeting: {e}"))?
+            };
+            (id, 0i64, Vec::new(), crate::diarize::SELF_CLUSTER + 1)
+        };
+
+        // Reset buffers/state for a fresh capture.
+        state.meeting.system_buf.lock().await.clear();
+        state.meeting.mic_buf.lock().await.clear();
+        *state.meeting.system_rate.lock().await = 0;
+        *state.meeting.mic_rate.lock().await = 0;
+        *state.meeting.meeting_id.lock().await = Some(meeting_id);
+        let start_instant = std::time::Instant::now();
+        *state.meeting.started.lock().await = Some(start_instant);
+        state.meeting.paused.store(false, Ordering::Relaxed);
+        state.meeting.recording.store(true, Ordering::Relaxed);
+
+        // Loopback (system output) capture thread.
+        {
+            let buf = state.meeting.system_buf.clone();
+            let rate = state.meeting.system_rate.clone();
+            let rec = state.meeting.recording.clone();
+            let h = std::thread::spawn(move || capture_system_loopback(buf, rate, rec));
+            state.meeting.threads.lock().await.push(h);
+        }
+        // Microphone capture thread.
+        {
+            let buf = state.meeting.mic_buf.clone();
+            let rate = state.meeting.mic_rate.clone();
+            let rec = state.meeting.recording.clone();
+            let h = std::thread::spawn(move || capture_mic(buf, rate, rec, mic_device));
+            state.meeting.threads.lock().await.push(h);
+        }
+
+        // Chunker: drain + transcribe every CHUNK_SECS, flushing the tail on stop. Each saved
+        // segment is also emitted so the UI can show the transcript building up live.
+        let st = state.meeting.clone();
+        let asr = state.asr.clone();
+        let db = state.db.clone();
+        let app_task = app.clone();
+
+        // Layer B: if the speaker-embedding model is downloaded, load it so guests get split into
+        // Speaker 1/2/3. Otherwise leave it off (guests stay one cluster) — an opt-in, no-cloud add.
+        let embedder: Option<crate::embedding::SpeakerEmbedder> =
+            if crate::embedding::is_downloaded(asr.models_dir()) {
+                match crate::embedding::SpeakerEmbedder::load(asr.models_dir()) {
+                    Ok(e) => {
+                        tracing::info!("Speaker separation ON (embedding model loaded)");
+                        Some(e)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Speaker model present but failed to load: {e}");
+                        None
+                    }
+                }
+            } else {
+                tracing::info!("Speaker separation OFF (no embedding model); guests shown as one");
+                None
+            };
+        let embedder = Arc::new(std::sync::Mutex::new(embedder));
+        let allow_recluster = resume_id.is_none();
+
+        // Layer D: if the streaming model is downloaded, use the online recognizer for word-by-word
+        // live transcription. Otherwise the proven chunked offline path runs (unchanged).
+        let streaming: Option<Arc<crate::streaming::StreamingRecognizer>> =
+            if crate::streaming::is_downloaded(asr.models_dir()) {
+                match crate::streaming::StreamingRecognizer::load(asr.models_dir()) {
+                    Ok(s) => {
+                        tracing::info!("Word-by-word streaming ON (streaming model loaded)");
+                        Some(Arc::new(s))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Streaming model present but failed to load: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+        let task = tokio::spawn(async move {
+            // Attributed turns so far, for live name resolution (seeded from the transcript when
+            // resuming); and the last speaker labels we emitted, so we only re-emit on change.
+            let mut turns: Vec<crate::diarize::Turn> = seed_turns;
+            let mut last_labels: Vec<(i64, String)> = Vec::new();
+            // Layer B: online clusterer for guest voices, active only when the embedder loaded.
+            // Guest ids continue above any existing speaker when resuming.
+            let mut clusterer = if embedder.lock().map(|g| g.is_some()).unwrap_or(false) {
+                Some(crate::diarize::OnlineClusterer::with_base(JOIN_THRESHOLD, guest_base))
+            } else {
+                None
+            };
+            let mut ticks: u32 = 0;
+
+            // --- Layer D: word-by-word streaming loop (when the streaming model is loaded) --------
+            if let Some(sr) = streaming.clone() {
+                let mut utter_sys: Vec<f32> = Vec::new();
+                let mut utter_mic: Vec<f32> = Vec::new();
+                let mut last_partial = String::new();
+                loop {
+                    // ~300 ms cadence so the line fills in quickly, honoring stop.
+                    for _ in 0..3 {
+                        if !st.recording.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    let still = st.recording.load(Ordering::Relaxed);
+                    if st.paused.load(Ordering::Relaxed) {
+                        st.system_buf.lock().await.clear();
+                        st.mic_buf.lock().await.clear();
+                        if !still {
+                            break;
+                        }
+                        continue;
+                    }
+                    let (sys, sys_rate, mic, mic_rate) = {
+                        let mut sb = st.system_buf.lock().await;
+                        let mut mb = st.mic_buf.lock().await;
+                        let sr_ = *st.system_rate.lock().await;
+                        let mr = *st.mic_rate.lock().await;
+                        (std::mem::take(&mut *sb), sr_, std::mem::take(&mut *mb), mr)
+                    };
+                    let sys16 = to_asr_rate(&sys, sys_rate);
+                    let mic16 = to_asr_rate(&mic, mic_rate);
+                    utter_sys.extend_from_slice(&sys16);
+                    utter_mic.extend_from_slice(&mic16);
+                    let mixed = mix_streams(&sys16, &mic16);
+
+                    // Feed + decode off the async runtime (FFI is blocking).
+                    let (partial, endpoint) = {
+                        let sr2 = sr.clone();
+                        let audio = mixed;
+                        tokio::task::spawn_blocking(move || {
+                            if !audio.is_empty() {
+                                sr2.accept(&audio);
+                            }
+                            sr2.poll()
+                        })
+                        .await
+                        .unwrap_or((String::new(), false))
+                    };
+
+                    if partial != last_partial {
+                        // Live speaker guess from the louder channel so far (finalized exactly below).
+                        let guess = if crate::diarize::rms(&utter_mic) >= crate::diarize::rms(&utter_sys) {
+                            crate::diarize::SELF_CLUSTER
+                        } else {
+                            crate::diarize::SELF_CLUSTER + 1
+                        };
+                        app_task
+                            .emit(
+                                "meeting-partial",
+                                MeetingPartialEvent {
+                                    meeting_id,
+                                    text: partial.clone(),
+                                    speaker_cluster: guess,
+                                },
+                            )
+                            .ok();
+                        last_partial = partial.clone();
+                    }
+
+                    if endpoint && !partial.is_empty() {
+                        // Finalize the utterance: attribute a speaker, save, name, clear the partial.
+                        let channel = crate::diarize::attribute_channel(
+                            crate::diarize::rms(&utter_mic),
+                            crate::diarize::rms(&utter_sys),
+                        );
+                        let cluster = match channel {
+                            crate::diarize::Channel::Self_ => crate::diarize::SELF_CLUSTER,
+                            _ => {
+                                let mut c = crate::diarize::SELF_CLUSTER + 1;
+                                if let Some(cl) = clusterer.as_mut() {
+                                    if let Some(v) = embed_guest(&embedder, utter_sys.clone()).await {
+                                        c = cl.assign(&v);
+                                    }
+                                }
+                                c
+                            }
+                        };
+                        let offset_ms = offset_base_ms + start_instant.elapsed().as_millis() as i64;
+                        {
+                            let db = db.lock().await;
+                            if let Err(e) =
+                                db.add_meeting_segment(meeting_id, offset_ms, &partial, cluster).await
+                            {
+                                tracing::warn!("Meeting: failed to save segment: {}", e);
+                            }
+                        }
+                        app_task
+                            .emit(
+                                "meeting-segment",
+                                MeetingSegmentEvent {
+                                    meeting_id,
+                                    offset_ms,
+                                    text: partial.clone(),
+                                    speaker_cluster: cluster,
+                                },
+                            )
+                            .ok();
+                        turns.push(crate::diarize::Turn { cluster, text: partial.clone() });
+                        sync_speakers(&db, &app_task, meeting_id, &turns, &mut last_labels).await;
+                        app_task
+                            .emit(
+                                "meeting-partial",
+                                MeetingPartialEvent { meeting_id, text: String::new(), speaker_cluster: cluster },
+                            )
+                            .ok();
+                        let sr3 = sr.clone();
+                        tokio::task::spawn_blocking(move || sr3.reset()).await.ok();
+                        utter_sys.clear();
+                        utter_mic.clear();
+                        last_partial.clear();
+                    }
+
+                    if !still {
+                        break;
+                    }
+                }
+                tracing::info!("Meeting streaming loop finished (meeting {})", meeting_id);
+                return;
+            }
+
+            // --- Chunked offline loop (default; proven path) -------------------------------------
+            loop {
+                for _ in 0..(CHUNK_SECS * 10) {
+                    if !st.recording.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                let still = st.recording.load(Ordering::Relaxed);
+                // While paused, throw away anything the capture threads buffered and transcribe
+                // nothing — the meeting stays open until Stop/Resume.
+                if st.paused.load(Ordering::Relaxed) {
+                    st.system_buf.lock().await.clear();
+                    st.mic_buf.lock().await.clear();
+                    if !still {
+                        break;
+                    }
+                    continue;
+                }
+                if let Some(tick) = process_tick(&st, &asr, &language).await {
+                    let text = tick.text;
+                    // Layer A + B: "You" from the channel split; for a guest, fingerprint the window
+                    // and let the online clusterer say which guest (Speaker 1/2/3). Falls back to a
+                    // single guest cluster when the embedder isn't loaded or the window won't embed.
+                    let cluster = match tick.channel {
+                        crate::diarize::Channel::Self_ => crate::diarize::SELF_CLUSTER,
+                        _ => {
+                            let mut assigned = crate::diarize::SELF_CLUSTER + 1;
+                            if let Some(clust) = clusterer.as_mut() {
+                                let emb_arc = embedder.clone();
+                                let audio = tick.guest16;
+                                let emb = tokio::task::spawn_blocking(move || {
+                                    emb_arc
+                                        .lock()
+                                        .ok()
+                                        .and_then(|mut g| g.as_mut().and_then(|e| e.compute(&audio)))
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(v) = emb {
+                                    assigned = clust.assign(&v);
+                                }
+                            }
+                            assigned
+                        }
+                    };
+                    ticks += 1;
+                    let offset_ms = offset_base_ms + start_instant.elapsed().as_millis() as i64;
+                    {
+                        let db = db.lock().await;
+                        if let Err(e) =
+                            db.add_meeting_segment(meeting_id, offset_ms, &text, cluster).await
+                        {
+                            tracing::warn!("Meeting: failed to save segment: {}", e);
+                        }
+                    }
+                    // Live transcript update (events = the fast path).
+                    app_task
+                        .emit(
+                            "meeting-segment",
+                            MeetingSegmentEvent {
+                                meeting_id,
+                                offset_ms,
+                                text: text.clone(),
+                                speaker_cluster: cluster,
+                            },
+                        )
+                        .ok();
+
+                    // Speaker intelligence: re-resolve names over everything said so far and, if the
+                    // speaker set or any label changed, persist it and tell the UI to relabel live.
+                    turns.push(crate::diarize::Turn { cluster, text });
+
+                    // Layer B self-correction: every so often, re-cluster the guest fingerprints to
+                    // fix drift (merge an over-split voice). Remap the stored + in-memory + live
+                    // cluster ids so the whole transcript stays consistent.
+                    if let Some(clust) = clusterer.as_mut() {
+                        // Self-correction is disabled when resuming: the clusterer only holds this
+                        // session's voices, so renumbering would collide with the seeded speakers.
+                        if allow_recluster && ticks % RECLUSTER_EVERY == 0 {
+                            let remap = clust.recluster(MERGE_THRESHOLD);
+                            let changed: Vec<(i64, i64)> =
+                                remap.iter().filter(|(o, n)| o != n).map(|(&o, &n)| (o, n)).collect();
+                            if !changed.is_empty() {
+                                for t in turns.iter_mut() {
+                                    if let Some(&(_, n)) = changed.iter().find(|(o, _)| *o == t.cluster) {
+                                        t.cluster = n;
+                                    }
+                                }
+                                {
+                                    let db = db.lock().await;
+                                    let _ = db.remap_segment_clusters(meeting_id, &changed).await;
+                                }
+                                app_task
+                                    .emit(
+                                        "meeting-remap",
+                                        MeetingRemapEvent { meeting_id, remap: changed },
+                                    )
+                                    .ok();
+                                last_labels.clear(); // force a fresh speaker re-emit below
+                            }
+                        }
+                    }
+
+                    let (speakers, resolved) = compute_speakers(&turns);
+                    let sig: Vec<(i64, String)> =
+                        speakers.iter().map(|s| (s.cluster, s.label.clone())).collect();
+                    if sig != last_labels {
+                        {
+                            let db = db.lock().await;
+                            for s in &speakers {
+                                let is_named = resolved.contains_key(&s.cluster);
+                                if let Err(e) = db
+                                    .upsert_speaker(meeting_id, s.cluster, &s.label, s.is_self, is_named)
+                                    .await
+                                {
+                                    tracing::warn!("Meeting: failed to upsert speaker: {}", e);
+                                }
+                            }
+                        }
+                        app_task
+                            .emit(
+                                "meeting-speakers",
+                                MeetingSpeakersEvent { meeting_id, speakers: speakers.clone() },
+                            )
+                            .ok();
+                        last_labels = sig;
+                    }
+                }
+                if !still {
+                    break;
+                }
+            }
+            tracing::info!("Meeting chunker finished (meeting {})", meeting_id);
+        });
+        *state.meeting.chunk_task.lock().await = Some(task);
+
+        // Swap into "meeting mode": hide the main window and pop the floating Notetaker panel
+        // (My thoughts / Transcript / Summary), like Wispr. The main window returns on stop.
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.hide();
+        }
+        crate::panel::show(&app);
+
+        tracing::info!("Meeting started (id {})", meeting_id);
+        Ok(meeting_id)
+    }
+}
+
+/// Stop capturing, flush the tail, and finalize the meeting row.
+#[command]
+pub async fn stop_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if !state.meeting.recording.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    state.meeting.recording.store(false, Ordering::Relaxed);
+    state.meeting.paused.store(false, Ordering::Relaxed);
+    // Leave meeting mode: hide the panel and bring the main window back to the foreground.
+    crate::panel::hide(&app);
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+
+    // Join native capture threads off the async runtime.
+    let threads: Vec<_> = std::mem::take(&mut *state.meeting.threads.lock().await);
+    let _ = tokio::task::spawn_blocking(move || {
+        for h in threads {
+            let _ = h.join();
+        }
+    })
+    .await;
+
+    // Await the chunker so the final window is transcribed and saved.
+    let task = state.meeting.chunk_task.lock().await.take();
+    if let Some(t) = task {
+        let _ = t.await;
+    }
+
+    let meeting_id = *state.meeting.meeting_id.lock().await;
+    let duration_ms = state
+        .meeting
+        .started
+        .lock()
+        .await
+        .map(|s| s.elapsed().as_millis() as i64)
+        .unwrap_or(0);
+    if let Some(id) = meeting_id {
+        let db = state.db.lock().await;
+        db.finish_meeting(id, duration_ms)
+            .await
+            .map_err(|e| format!("Could not finalize meeting: {e}"))?;
+
+        // Auto-rename from the transcript, locally, if the user never set a title. Keeps the
+        // meeting list readable without any model or network call.
+        let mut final_title = db
+            .get_meeting(id)
+            .await
+            .ok()
+            .flatten()
+            .map(|m| m.title)
+            .unwrap_or_else(|| "Untitled meeting".to_string());
+        if final_title == "Untitled meeting" {
+            let segs = db.list_meeting_segments(id).await.unwrap_or_default();
+            let texts: Vec<String> = segs.into_iter().map(|s| s.text).collect();
+            if let Some(title) = derive_title(&texts) {
+                if db.rename_meeting(id, &title).await.is_ok() {
+                    final_title = title;
+                }
+            }
+        }
+        app.emit(
+            "meeting-finished",
+            MeetingFinishedEvent { meeting_id: id, title: final_title },
+        )
+        .ok();
+    }
+    tracing::info!("Meeting stopped");
+    Ok(())
+}
+
+#[command]
+pub async fn meeting_status(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<MeetingStatus, String> {
+    let recording = state.meeting.recording.load(Ordering::Relaxed);
+    let paused = state.meeting.paused.load(Ordering::Relaxed);
+    let meeting_id = *state.meeting.meeting_id.lock().await;
+    let elapsed_ms = if recording {
+        state
+            .meeting
+            .started
+            .lock()
+            .await
+            .map(|s| s.elapsed().as_millis() as i64)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(MeetingStatus { recording, paused, meeting_id, elapsed_ms })
+}
+
+/// Pause the meeting — stop transcribing (capture audio is discarded) but keep it open.
+#[command]
+pub async fn pause_meeting(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    if state.meeting.recording.load(Ordering::Relaxed) {
+        state.meeting.paused.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Resume a paused meeting.
+#[command]
+pub async fn resume_meeting(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    state.meeting.paused.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+#[command]
+pub async fn list_meetings(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<Vec<crate::db::MeetingRow>, String> {
+    let db = state.db.lock().await;
+    db.list_meetings().await.map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+) -> Result<MeetingDetail, String> {
+    let db = state.db.lock().await;
+    let meeting = db
+        .get_meeting(id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Meeting not found".to_string())?;
+    let segments = db.list_meeting_segments(id).await.map_err(|e| e.to_string())?;
+    let speakers = db.list_speakers(id).await.map_err(|e| e.to_string())?;
+    Ok(MeetingDetail { meeting, segments, speakers })
+}
+
+/// Rename a speaker in a meeting (user edit). Marks it so the naming heuristic never overwrites it,
+/// and relabels every line of that speaker cluster.
+#[command]
+pub async fn rename_speaker(
+    state: State<'_, crate::app_state::AppState>,
+    meeting_id: i64,
+    cluster: i64,
+    label: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.rename_speaker(meeting_id, cluster, &label)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether the optional speaker-separation (voice-embedding) model is downloaded, and its size.
+#[derive(serde::Serialize)]
+pub struct SpeakerModelStatus {
+    pub downloaded: bool,
+    pub size_mb: u64,
+}
+
+#[command]
+pub async fn speaker_model_status(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<SpeakerModelStatus, String> {
+    Ok(SpeakerModelStatus {
+        downloaded: crate::embedding::is_downloaded(state.asr.models_dir()),
+        size_mb: crate::embedding::MODEL_SIZE_BYTES / 1_000_000,
+    })
+}
+
+/// Download the speaker-separation model (opt-in, ~40 MB, on-device). Emits `speaker-model-progress`
+/// {progress: 0..1} so the UI can show a bar. This is the only network use the Notetaker ever makes
+/// beyond the ASR model download, and it is never automatic.
+#[command]
+pub async fn download_speaker_model(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dir = state.asr.models_dir().to_path_buf();
+    let app2 = app.clone();
+    crate::embedding::download(&dir, move |p| {
+        app2.emit("speaker-model-progress", p).ok();
+    })
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// Status of the optional word-by-word streaming model.
+#[derive(serde::Serialize)]
+pub struct StreamingModelStatus {
+    pub downloaded: bool,
+    pub size_mb: u64,
+}
+
+#[command]
+pub async fn streaming_model_status(
+    state: State<'_, crate::app_state::AppState>,
+) -> Result<StreamingModelStatus, String> {
+    Ok(StreamingModelStatus {
+        downloaded: crate::streaming::is_downloaded(state.asr.models_dir()),
+        size_mb: crate::streaming::MODEL_SIZE_MB,
+    })
+}
+
+/// Download the opt-in word-by-word streaming model (~45 MB, on-device). Emits
+/// `streaming-model-progress` {0..1}. Never automatic; the only extra network use is this download.
+#[command]
+pub async fn download_streaming_model(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dir = state.asr.models_dir().to_path_buf();
+    let app2 = app.clone();
+    crate::streaming::download(&dir, move |p| {
+        app2.emit("streaming-model-progress", p).ok();
+    })
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn rename_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+    title: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.rename_meeting(id, &title).await.map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn delete_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.delete_meeting(id).await.map_err(|e| e.to_string())
+}
+
+/// The floating Notetaker panel page reports it has loaded. Marks the panel ready and, if a meeting
+/// is already recording (the panel finished loading after the meeting started), shows it now.
+#[command]
+pub async fn notetaker_ready(
+    state: State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    crate::panel::mark_ready();
+    if state.meeting.recording.load(Ordering::Relaxed) {
+        crate::panel::show(&app);
+    }
+    // Return the user's selected theme so the panel paints the right surface reliably (reading it
+    // from the DB here is more robust than a second IPC round-trip from the panel window).
+    let theme = {
+        let db = state.db.lock().await;
+        crate::commands::load_settings_from_db(&db)
+            .await
+            .map(|s| s.theme)
+            .unwrap_or_else(|_| "glass".to_string())
+    };
+    Ok(theme)
+}
+
+/// Save a meeting's free-text notes ("My notes").
+#[command]
+pub async fn save_meeting_notes(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+    notes: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.save_meeting_notes(id, &notes).await.map_err(|e| e.to_string())
+}
+
+/// Edit one transcript segment's text.
+#[command]
+pub async fn update_meeting_segment(
+    state: State<'_, crate::app_state::AppState>,
+    segment_id: i64,
+    text: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.update_meeting_segment(segment_id, &text).await.map_err(|e| e.to_string())
+}
+
+/// Delete one transcript segment.
+#[command]
+pub async fn delete_meeting_segment(
+    state: State<'_, crate::app_state::AppState>,
+    segment_id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.delete_meeting_segment(segment_id).await.map_err(|e| e.to_string())
+}
+
+/// Produce a **local extractive summary** of a meeting from its transcript — no model, no cloud.
+/// Computed on demand so it always matches the current transcript. See `summary.rs`.
+#[command]
+pub async fn summarize_meeting(
+    state: State<'_, crate::app_state::AppState>,
+    id: i64,
+) -> Result<crate::summary::Summary, String> {
+    let segments = {
+        let db = state.db.lock().await;
+        db.list_meeting_segments(id).await.map_err(|e| e.to_string())?
+    };
+    let transcript = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(crate::summary::summarize(&transcript, 5))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downmix_averages_channels() {
+        let stereo = [1.0, 0.0, 0.5, 0.5];
+        assert_eq!(downmix_mono(&stereo, 2), vec![0.5, 0.5]);
+        assert_eq!(downmix_mono(&[0.1, 0.2], 1), vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn mix_sums_and_clamps() {
+        let a = [0.5, 0.9, -0.9];
+        let b = [0.5, 0.9, -0.9];
+        assert_eq!(mix_streams(&a, &b), vec![1.0, 1.0, -1.0]);
+    }
+
+    #[test]
+    fn mix_pads_shorter_stream_with_silence() {
+        let a = [0.2, 0.2, 0.2];
+        let b = [0.1];
+        assert_eq!(mix_streams(&a, &b), vec![0.3, 0.2, 0.2]);
+        assert_eq!(mix_streams(&[], &a), vec![0.2, 0.2, 0.2]);
+    }
+
+    #[test]
+    fn to_asr_rate_guards_empty_and_zero_rate() {
+        assert!(to_asr_rate(&[], 48000).is_empty());
+        assert!(to_asr_rate(&[0.1, 0.2], 0).is_empty());
+    }
+
+    #[test]
+    fn derive_title_uses_first_sentence() {
+        let segs = vec![
+            "Okay let us kick off the design sync.".to_string(),
+            "First item is the layout.".to_string(),
+        ];
+        assert_eq!(derive_title(&segs).as_deref(), Some("Okay let us kick off the design sync"));
+    }
+
+    #[test]
+    fn derive_title_caps_to_eight_words() {
+        let segs = vec!["one two three four five six seven eight nine ten".to_string()];
+        assert_eq!(derive_title(&segs).as_deref(), Some("one two three four five six seven eight"));
+    }
+
+    #[test]
+    fn derive_title_none_on_empty() {
+        assert!(derive_title(&[]).is_none());
+        assert!(derive_title(&["   ".to_string()]).is_none());
+    }
+}

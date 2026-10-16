@@ -8,10 +8,13 @@ mod cleanup;
 mod commands;
 mod db;
 mod denoise;
+mod diarize;
+mod embedding;
 mod engine;
 mod expand;
 mod hotkey;
 mod injection;
+mod meeting;
 #[cfg(feature = "moonshine")]
 mod moonshine;
 #[cfg(feature = "moonshine")]
@@ -22,8 +25,11 @@ mod dolphin;
 mod nemo_ctc;
 mod optimize;
 mod overlay;
+mod panel;
 mod sound;
 mod storage;
+mod streaming;
+mod summary;
 mod streaks;
 mod system;
 mod tray;
@@ -230,11 +236,13 @@ fn main() {
                 target_window: Arc::new(Mutex::new(0)),
                 chunk_state: Arc::new(Mutex::new(Default::default())),
                 chunk_task: Arc::new(Mutex::new(None)),
+                meeting: crate::meeting::MeetingState::default(),
             };
             app.manage(state);
 
             tray::build(&app_handle)?;
             overlay::create(&app_handle)?;
+            panel::create(&app_handle)?;
 
             if settings.hotkey_enabled == 0 {
                 tracing::info!("Dictation hotkey disabled in settings; not registering it.");
@@ -331,6 +339,28 @@ fn main() {
             commands::optimize_selection,
             commands::get_storage_report,
             commands::reclaim_storage,
+            meeting::start_meeting,
+            meeting::stop_meeting,
+            meeting::meeting_status,
+            meeting::list_meetings,
+            meeting::get_meeting,
+            meeting::rename_meeting,
+            meeting::rename_speaker,
+            meeting::speaker_model_status,
+            meeting::download_speaker_model,
+            meeting::streaming_model_status,
+            meeting::download_streaming_model,
+            meeting::delete_meeting,
+            meeting::summarize_meeting,
+            meeting::save_meeting_notes,
+            meeting::update_meeting_segment,
+            meeting::delete_meeting_segment,
+            meeting::notetaker_ready,
+            meeting::pause_meeting,
+            meeting::resume_meeting,
+            panel::panel_dock,
+            panel::panel_expand,
+            panel::panel_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

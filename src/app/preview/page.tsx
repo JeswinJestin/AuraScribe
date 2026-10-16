@@ -19,6 +19,7 @@ import { SpotlightTour } from '@/components/SpotlightTour'
 import { InsightsView } from '@/components/views/InsightsView'
 import { RecapView } from '@/components/views/RecapView'
 import { HistoryView } from '@/components/views/HistoryView'
+import { NotetakerView } from '@/components/views/NotetakerView'
 import { recapYear } from '@/components/views/RecapView'
 import { SettingsView } from '@/components/views/SettingsView'
 import type { Settings, Status } from '@/lib/ipc'
@@ -62,8 +63,45 @@ const MOCK_TRANSCRIPTS = [
   },
 ]
 
+const NOW = Math.floor(Date.now() / 1000)
+const MOCK_MEETINGS = [
+  { id: 2, title: 'Design sync', started_at: NOW - 3600, ended_at: NOW - 1800, duration_ms: 1_800_000, word_count: 1240, source: 'system+mic', notes: '' },
+  { id: 1, title: 'Standup', started_at: NOW - 90000, ended_at: NOW - 89100, duration_ms: 900_000, word_count: 320, source: 'system+mic', notes: '' },
+]
+
 const MOCK: Record<string, unknown> = {
   get_transcripts: MOCK_TRANSCRIPTS,
+  list_meetings: MOCK_MEETINGS,
+  meeting_status: { recording: false, meeting_id: null, elapsed_ms: 0 },
+  get_meeting: {
+    meeting: MOCK_MEETINGS[0],
+    segments: [
+      { id: 1, meeting_id: 2, offset_ms: 0, text: 'Okay, let us kick off the design sync. First item is the Notetaker layout.', created_at: NOW, speaker_cluster: 0 },
+      { id: 2, meeting_id: 2, offset_ms: 12_000, text: 'I think the transcript should read top to bottom with timestamps on the left.', created_at: NOW, speaker_cluster: 1 },
+      { id: 3, meeting_id: 2, offset_ms: 31_000, text: 'Agreed. And we keep it local — no cloud summary in this version.', created_at: NOW, speaker_cluster: 1 },
+    ],
+    speakers: [
+      { cluster: 0, label: 'You', is_self: 1 },
+      { cluster: 1, label: 'Alex', is_self: 0 },
+    ],
+  },
+  delete_meeting: null,
+  save_meeting_notes: null,
+  update_meeting_segment: null,
+  delete_meeting_segment: null,
+  rename_meeting: null,
+  rename_speaker: null,
+  speaker_model_status: { downloaded: false, size_mb: 40 },
+  download_speaker_model: null,
+  streaming_model_status: { downloaded: false, size_mb: 45 },
+  download_streaming_model: null,
+  summarize_meeting: {
+    key_points: [
+      'The transcript should read top to bottom with timestamps on the left.',
+      'We keep it local — no cloud summary in this version.',
+    ],
+    keywords: ['transcript', 'local', 'layout', 'timestamps'],
+  },
   transcript_daily_counts: [
     { day: new Date().toISOString().slice(0, 10), count: 5 },
     { day: new Date(Date.now() - 86400000).toISOString().slice(0, 10), count: 3 },
@@ -168,6 +206,7 @@ const MOCK_SETTINGS: Settings = {
   noise_suppression: false,
   prompt_optimize_enabled: true,
   prompt_optimize_hotkey: 'Ctrl+Shift+O',
+  fuzzy_dictionary: false,
 }
 
 const MOCK_STATUS: Status = {
@@ -186,7 +225,20 @@ if (typeof window !== 'undefined') {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any
   w.__TAURI_INTERNALS__ = w.__TAURI_INTERNALS__ ?? {}
+  // Stub the event API too, so components that `listen()` (e.g. the Notetaker live transcript)
+  // don't throw in the harness. Events never actually fire here; that's fine for a visual preview.
+  if (typeof w.__TAURI_INTERNALS__.transformCallback !== 'function') {
+    w.__TAURI_INTERNALS__.transformCallback = (cb: unknown) => {
+      const id = Math.floor(Math.random() * 1e9)
+      w.__TAURI_INTERNALS__.__cbs = w.__TAURI_INTERNALS__.__cbs ?? {}
+      w.__TAURI_INTERNALS__.__cbs[id] = cb
+      return id
+    }
+  }
   w.__TAURI_INTERNALS__.invoke = async (cmd: string, args?: any) => {
+    // Event plugin: pretend to subscribe/unsubscribe so listen()/unlisten() resolve cleanly.
+    if (cmd === 'plugin:event|listen') return Math.floor(Math.random() * 1e9)
+    if (cmd === 'plugin:event|unlisten') return null
     if (cmd === 'search_transcripts') {
       const q = (args?.query ?? '').toLowerCase()
       return MOCK_TRANSCRIPTS.filter(
@@ -201,7 +253,7 @@ if (typeof window !== 'undefined') {
   }
 }
 
-type Mode = 'history' | 'insights' | 'recap' | 'onboarding' | 'settings'
+type Mode = 'history' | 'notetaker' | 'insights' | 'recap' | 'onboarding' | 'settings'
 
 export default function PreviewPage() {
   const [mode, setMode] = useState<Mode>('history')
@@ -216,6 +268,7 @@ export default function PreviewPage() {
 
   const tabs: { id: Mode; label: string }[] = [
     { id: 'history', label: 'History · Search & Delete' },
+    { id: 'notetaker', label: 'Notetaker' },
     { id: 'insights', label: 'Insights · Streak Share' },
     { id: 'recap', label: `Recap · ${YEAR}` },
     { id: 'onboarding', label: 'Onboarding' },
@@ -248,6 +301,12 @@ export default function PreviewPage() {
       {mode === 'history' && (
         <div className="mx-auto max-w-3xl px-8 py-10">
           <HistoryView />
+        </div>
+      )}
+
+      {mode === 'notetaker' && (
+        <div className="mx-auto max-w-3xl px-8 py-10">
+          <NotetakerView />
         </div>
       )}
 

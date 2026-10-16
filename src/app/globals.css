@@ -21,7 +21,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 40 8% 10%;
 
-    --primary: 227 100% 65%;       /* #4C6FFF indigo */
+    --primary: 228 64% 56%;        /* #3D55C9 calm indigo — toned down from the old neon #4C6FFF */
     --primary-foreground: 0 0% 100%;
 
     --secondary: 40 24% 96%;       /* input/field fill = cream */
@@ -35,12 +35,12 @@
     --destructive-foreground: 0 0% 100%;
 
     --record: 5 64% 42%;           /* listening */
-    --standby: 227 100% 65%;       /* transcribing — indigo sweep */
+    --standby: 228 64% 56%;        /* transcribing — indigo sweep (matched to primary) */
 
     --border: 43 16% 89%;          /* #E8E5DD hairline */
     --border-soft: 43 22% 92%;     /* #F0EEE7 inner dividers */
     --input: 43 16% 89%;
-    --ring: 227 100% 65%;
+    --ring: 228 64% 56%;
     --faint: 43 11% 64%;           /* #ADA99C faintest text */
     --radius: 0.875rem;            /* 14px cards */
   }
@@ -53,7 +53,7 @@
     --popover: 40 8% 14%;
     --popover-foreground: 40 18% 92%;
 
-    --primary: 227 100% 71%;
+    --primary: 228 56% 64%;        /* calm indigo for dark/glass — toned down from the old neon */
     --primary-foreground: 40 9% 11%;
 
     --secondary: 40 7% 17%;
@@ -67,12 +67,12 @@
     --destructive-foreground: 40 9% 11%;
 
     --record: 5 74% 60%;
-    --standby: 227 100% 71%;
+    --standby: 228 56% 64%;
 
     --border: 40 6% 22%;
     --border-soft: 40 6% 19%;
     --input: 40 6% 24%;
-    --ring: 227 100% 71%;
+    --ring: 228 56% 64%;
     --faint: 40 6% 48%;
   }
 }
@@ -157,6 +157,31 @@
   .glass-bg .app-shell * {
     border-color: rgba(255, 255, 255, 0.14);
   }
+  /* Browser surfaces follow the palette (craft floor): text selection, the caret, and a thin,
+     themed scrollbar instead of the OS default — the cheapest signal the app was designed. */
+  ::selection {
+    background: hsl(var(--primary) / 0.28);
+  }
+  * {
+    caret-color: hsl(var(--primary));
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--foreground) / 0.16);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--foreground) / 0.3);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
   /*
     Native <select> dropdowns default to an OS black popup, which looked jarring in dark/glass.
     The open option list can't be made truly translucent (the OS draws it), but it CAN follow

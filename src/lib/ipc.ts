@@ -25,6 +25,8 @@ export interface Settings {
   prompt_optimize_enabled: boolean
   /** Global shortcut for prompt optimization (distinct from the dictation hotkey). */
   prompt_optimize_hotkey: string
+  /** When true, dictation also fuzzy-corrects near-miss mishears of your dictionary terms. Default false. */
+  fuzzy_dictionary: boolean
 }
 
 export interface Status {
@@ -340,4 +342,234 @@ export async function onModelDownloadProgress(
 // Emit to Rust
 export async function emitToRust(event: string, payload: unknown) {
   return emit(event, payload)
+}
+
+// --- Notetaker (local meeting transcription) -------------------------------------------------
+
+export interface Meeting {
+  id: number
+  title: string
+  started_at: number
+  ended_at: number | null
+  duration_ms: number
+  word_count: number
+  source: string
+  notes: string
+}
+
+export interface MeetingSegment {
+  id: number
+  meeting_id: number
+  offset_ms: number
+  text: string
+  created_at: number
+  /** Speaker cluster: 0 = You, 1..N = guests, -1 = unknown (older meetings). */
+  speaker_cluster: number
+}
+
+/** A speaker in a meeting — cluster id + its current display label ("You" / "Speaker 1" / a name). */
+export interface Speaker {
+  cluster: number
+  label: string
+  /** 1 (or true) for the local user. The backend sends a number in getMeeting, a bool in events. */
+  is_self: number | boolean
+}
+
+export interface MeetingStatus {
+  recording: boolean
+  paused: boolean
+  meeting_id: number | null
+  elapsed_ms: number
+}
+
+export interface MeetingDetail {
+  meeting: Meeting
+  segments: MeetingSegment[]
+  speakers: Speaker[]
+}
+
+export async function startMeeting(title?: string, resumeId?: number): Promise<number> {
+  return invoke<number>('start_meeting', { title: title ?? null, resumeId: resumeId ?? null })
+}
+
+/** Resume a finished meeting — continues capture into it, appending new lines. */
+export async function resumeMeetingRecording(id: number): Promise<number> {
+  return invoke<number>('start_meeting', { title: null, resumeId: id })
+}
+
+export async function stopMeeting(): Promise<void> {
+  return invoke('stop_meeting')
+}
+
+export async function meetingStatus(): Promise<MeetingStatus> {
+  return invoke<MeetingStatus>('meeting_status')
+}
+
+export async function listMeetings(): Promise<Meeting[]> {
+  return invoke<Meeting[]>('list_meetings')
+}
+
+export async function getMeeting(id: number): Promise<MeetingDetail> {
+  return invoke<MeetingDetail>('get_meeting', { id })
+}
+
+export async function renameMeeting(id: number, title: string): Promise<void> {
+  return invoke('rename_meeting', { id, title })
+}
+
+export async function deleteMeeting(id: number): Promise<void> {
+  return invoke('delete_meeting', { id })
+}
+
+/** A local extractive summary of a meeting (no model, no cloud). */
+export interface Summary {
+  key_points: string[]
+  keywords: string[]
+}
+
+export async function summarizeMeeting(id: number): Promise<Summary> {
+  return invoke<Summary>('summarize_meeting', { id })
+}
+
+export async function saveMeetingNotes(id: number, notes: string): Promise<void> {
+  return invoke('save_meeting_notes', { id, notes })
+}
+
+export async function updateMeetingSegment(segmentId: number, text: string): Promise<void> {
+  return invoke('update_meeting_segment', { segmentId, text })
+}
+
+export async function deleteMeetingSegment(segmentId: number): Promise<void> {
+  return invoke('delete_meeting_segment', { segmentId })
+}
+
+/** The floating Notetaker panel calls this on load; the backend shows it if a meeting is live and
+ *  returns the user's selected theme ('light' | 'dark' | 'system' | 'glass') for the panel surface. */
+export async function notetakerReady(): Promise<string> {
+  return invoke<string>('notetaker_ready')
+}
+
+export async function pauseMeeting(): Promise<void> {
+  return invoke('pause_meeting')
+}
+
+export async function resumeMeeting(): Promise<void> {
+  return invoke('resume_meeting')
+}
+
+/** Restore the floating panel to its default size docked on the right edge ("small window"). */
+export async function panelDock(): Promise<void> {
+  return invoke('panel_dock')
+}
+
+/** Expand the floating panel to a large, centered reading window. */
+export async function panelExpand(): Promise<void> {
+  return invoke('panel_expand')
+}
+
+/** Close the floating panel and bring the main window back (the meeting keeps recording). */
+export async function panelClose(): Promise<void> {
+  return invoke('panel_close')
+}
+
+/** Fires each time a window is transcribed during capture — for the live transcript. */
+export async function onMeetingSegment(
+  callback: (payload: {
+    meeting_id: number
+    offset_ms: number
+    text: string
+    speaker_cluster: number
+  }) => void
+) {
+  return listen<{ meeting_id: number; offset_ms: number; text: string; speaker_cluster: number }>(
+    'meeting-segment',
+    (e) => callback(e.payload)
+  )
+}
+
+/** Fires whenever the speaker set or any label changes (new speaker, or a name resolves), so the
+ *  UI can relabel every line of a cluster live and retroactively. */
+export async function onMeetingSpeakers(
+  callback: (payload: { meeting_id: number; speakers: Speaker[] }) => void
+) {
+  return listen<{ meeting_id: number; speakers: Speaker[] }>('meeting-speakers', (e) =>
+    callback(e.payload)
+  )
+}
+
+/** Rename a speaker (user edit) — relabels all of that speaker's lines; the heuristic won't undo it. */
+export async function renameSpeaker(
+  meetingId: number,
+  cluster: number,
+  label: string
+): Promise<void> {
+  return invoke('rename_speaker', { meetingId, cluster, label })
+}
+
+/** Fires as a line is being spoken (streaming): the growing partial hypothesis. Empty text clears it. */
+export async function onMeetingPartial(
+  callback: (payload: { meeting_id: number; text: string; speaker_cluster: number }) => void
+) {
+  return listen<{ meeting_id: number; text: string; speaker_cluster: number }>(
+    'meeting-partial',
+    (e) => callback(e.payload)
+  )
+}
+
+/** Fires after a self-correction re-cluster merges guests, so the UI can remap live line clusters. */
+export async function onMeetingRemap(
+  callback: (payload: { meeting_id: number; remap: [number, number][] }) => void
+) {
+  return listen<{ meeting_id: number; remap: [number, number][] }>('meeting-remap', (e) =>
+    callback(e.payload)
+  )
+}
+
+export interface SpeakerModelStatus {
+  downloaded: boolean
+  size_mb: number
+}
+
+/** Whether the optional speaker-separation model (splits guests into Speaker 1/2/3) is downloaded. */
+export async function speakerModelStatus(): Promise<SpeakerModelStatus> {
+  return invoke<SpeakerModelStatus>('speaker_model_status')
+}
+
+/** Download the opt-in speaker-separation model (~40 MB, on-device). Progress via onSpeakerModelProgress. */
+export async function downloadSpeakerModel(): Promise<void> {
+  return invoke('download_speaker_model')
+}
+
+/** Progress (0..1) of the speaker-separation model download. */
+export async function onSpeakerModelProgress(callback: (progress: number) => void) {
+  return listen<number>('speaker-model-progress', (e) => callback(e.payload))
+}
+
+export interface StreamingModelStatus {
+  downloaded: boolean
+  size_mb: number
+}
+
+/** Whether the opt-in word-by-word streaming model is downloaded. */
+export async function streamingModelStatus(): Promise<StreamingModelStatus> {
+  return invoke<StreamingModelStatus>('streaming_model_status')
+}
+
+/** Download the opt-in word-by-word streaming model (~45 MB, on-device). */
+export async function downloadStreamingModel(): Promise<void> {
+  return invoke('download_streaming_model')
+}
+
+/** Progress (0..1) of the streaming model download. */
+export async function onStreamingModelProgress(callback: (progress: number) => void) {
+  return listen<number>('streaming-model-progress', (e) => callback(e.payload))
+}
+
+/** Fires after Stop once the meeting is finalized and (maybe) auto-renamed. */
+export async function onMeetingFinished(
+  callback: (payload: { meeting_id: number; title: string }) => void
+) {
+  return listen<{ meeting_id: number; title: string }>('meeting-finished', (e) =>
+    callback(e.payload)
+  )
 }

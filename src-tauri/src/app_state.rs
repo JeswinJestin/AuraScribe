@@ -31,4 +31,7 @@ pub struct AppState {
     /// The chunker itself. `stop_recording` awaits this; the task flushes the tail of the
     /// recording before exiting, so awaiting it is what guarantees nothing is lost.
     pub chunk_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Notetaker (local meeting transcription). Entirely separate from the dictation state above,
+    /// so a meeting cannot touch the proven dictation hot path. See `meeting.rs`.
+    pub meeting: crate::meeting::MeetingState,
 }

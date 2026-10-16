@@ -8,6 +8,7 @@ import type { Settings, Status } from '@/lib/ipc'
 import { Sidebar, type View } from '@/components/Sidebar'
 import { WidgetRail } from '@/components/WidgetRail'
 import { DictateView } from '@/components/views/DictateView'
+import { NotetakerView } from '@/components/views/NotetakerView'
 import { HistoryView } from '@/components/views/HistoryView'
 import { DictionaryView } from '@/components/views/DictionaryView'
 import { SnippetsView } from '@/components/views/SnippetsView'
@@ -45,6 +46,7 @@ const DEFAULT_SETTINGS: Settings = {
   noise_suppression: false,
   prompt_optimize_enabled: false,
   prompt_optimize_hotkey: 'Ctrl+Shift+O',
+  fuzzy_dictionary: false,
 }
 
 /** Frameless-window controls. No-op outside Tauri (e.g. the browser preview). */
@@ -249,6 +251,7 @@ export default function App() {
                   onGoToSettings={() => setView('settings')}
                 />
               )}
+              {view === 'notetaker' && <NotetakerView />}
               {view === 'history' && <HistoryView reloadToken={historyReloadToken} />}
               {view === 'dictionary' && <DictionaryView />}
               {view === 'snippets' && <SnippetsView />}

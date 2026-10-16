@@ -564,3 +564,246 @@ they are genuine defects regardless of platform, but only the friend's on-device
 with a said-vs-shown example proves the fix. Did not rewrite the proven audio path on a guess; made the
 minimal change that removes the data loss. Nothing committed/pushed (owner's "working across devices
 first" rule).
+
+### 2026-10-13 — Notepad injection fixed (paste-first on Windows); Notetaker MVP begun (Phase 1)
+
+Two things, from a user's bug report plus an owner-approved scope expansion. Full design:
+`docs/superpowers/specs/2026-10-13-notetaker-design.md`.
+
+**The Notepad bug — root-caused and permanently fixed.** A user (Ryan) reported that on Win 11 his
+dictations landed as runs of `......` and `?????` — but only in **Windows Notepad**; his own follow-up
+found Notepad++ and the browser worked. That A/B was the whole diagnosis: short dictations (≤120 chars)
+took the per-character `SendInput`/`KEYEVENTF_UNICODE` **typing** path, and the rewritten Windows 11
+Notepad (WinAppSDK/RichEdit) has a known buffering defect with rapid injected Unicode keystrokes —
+they arrive garbled unless a real input event flushes the queue. Scintilla (Notepad++) and Chromium
+drain it fine. Fix: **Windows now pastes every dictation** (the clipboard path the code already trusted
+as incorruptible for long text); typing is demoted to the fallback for paste-hostile windows. Low risk
+— it extends an already-proven path and the clipboard-restore race was already handled. **Honest
+limit:** interactive injection can't be verified headless, so the final proof is the owner dictating
+into the new Notepad. Grounded the diagnosis with a web search (AutoHotkey "SendInput halted in Win 11
+Notepad"; microsoft/terminal #12977) rather than guessing.
+
+**Notetaker — the scope-creep question, handled deliberately.** The ask was "a notetaker like Wispr
+Flow, including meetings I join on headphones." This is the PRD's **#1 named v1 non-goal**, so it got a
+real pushback first: Wispr's value is **cloud STT + cloud LLM summaries**, both of which break
+AuraScribe's non-negotiables (no cloud ever; ~4.6 MB lightweight — a local summarizer is multi-GB). The
+owner chose to build the **part that stays true to the product**: capture **system loopback (what you
+hear) + mic**, transcribe **locally**, store a **transcript** — **no AI summary, no cloud, no account**.
+That boundary is written into the spec so it can't quietly drift back toward "Wispr, but breaking our
+own rules."
+
+**Phase 1 shipped (isolated from the dictation hot path):** migration `011_meetings.sql` + DB methods;
+`meeting.rs` doing **WASAPI loopback via the `windows` crate we already depend on** (added
+`Win32_Media_Audio`/`Win32_Media_KernelStreaming` features — deliberately **no new crate**) + mic mix
+through the existing ASR pipeline; 7 Tauri commands; a Notetaker sidebar view + `/preview` tab.
+**92/92 cargo tests, tsc clean, UI verified in the browser preview** (list + transcript detail). **What
+is NOT proven:** the loopback/mic capture + transcription at runtime — COM audio the sandbox can't
+exercise; the owner's first real call + `aurascribe.log` (which logs the detected loopback format/rate)
+is the verification, same honesty bar as the macOS/Linux audio paths. Phase 2 = that on-device run +
+repair + live indicator; Phase 3 = long-form accuracy (a dedicated meeting model), export/search, and
+an **optional** local summary only via the already-opt-in `prompt` LLM. Nothing committed/pushed.
+
+### 2026-10-14 — Notetaker Phase 2: loopback verified on hardware; real-time transcript; the cloud question
+
+**The unverified part is now verified.** The owner ran a real capture and `aurascribe.log` proved both
+sources work: mic `F32, 48000Hz, 1ch` and **WASAPI system loopback `48000Hz, 2ch, 32bit, float=true`**.
+The blind COM audio code was correct. Test A (paste-first Notepad fix) also confirmed working. This is
+the payoff of the honest "it compiles but needs your hardware" labelling — it held up.
+
+**Phase 2 built:** real-time transcript (the chunker emits a `meeting-segment` event per 6s window; the
+Notetaker view grows a live panel while recording, instead of only after Stop) and local auto-rename
+(`derive_title` from the first sentence — no model, no network). cargo test 95/95, tsc clean, verified
+in /preview.
+
+**The cloud question (recorded, not acted on).** The owner pushed back on the no-cloud non-negotiable:
+a local model's knowledge is frozen, so how do you validate *recent* facts or enrich entities? Good
+question — and the honest answer separates three things: (1) **dictation** basically never needs the
+internet (it's transcribing speech, not answering questions) — accuracy comes from better acoustic
+modelling + context biasing, all local; (2) **meeting summaries** summarise what was *said*, which is
+in the transcript — a local LLM does this fine without current-events knowledge; (3) **fact-checking a
+claim made in a meeting** (the Wispr "homepage says 8,500 vs 11,000" case) is the *only* part that
+genuinely needs live external data. So the proposal is: local by default for 1 and 2; any online call
+for 3 is strictly opt-in, per-feature, clearly labelled, and never ships content without explicit
+consent — which preserves the privacy promise that is the product's entire differentiator vs Wispr
+Flow. The `CLAUDE.md` cautionary tale was about *lying* (AES-256 over a plaintext key), not about
+honest opt-in online features. **Decision deferred to the owner; nothing cloud added.** Also captured a
+menu of local accuracy ideas (contextual biasing/hotwords from the user's Dictionary, app-aware
+vocabulary, Silero VAD endpointing, a punctuation-restoration model, speaker diarization, streaming
+partial results) as the real levers for "more accurate dictation, fewer errors." Nothing committed to
+master; work is on branch `feat/notetaker-mvp-and-notepad-fix`.
+
+### 2026-10-16 — Notetaker floating-panel window chrome + Wispr-grade list redesign
+
+**Panel window controls.** The floating Notetaker panel now behaves like a real window instead of a
+fixed slab. Top-right chrome: **Expand** (⤢) grows it to a large centered reading window; the
+**restore / "small window"** icon docks it straight back to its default full-height, right-edge size;
+**Minimize**; and **Close**, which hides the panel and brings the main app window back — the meeting
+keeps recording and is controllable again from the in-app Notetaker view, so Close never strands the
+user (matches Wispr's return-to-app behaviour). Three new monitor-aware Rust commands in `panel.rs` do
+the sizing — `panel_expand` (~72%×92% of the work area, centered, drops always-on-top so it reads as a
+focused surface), `panel_dock` (reuses the existing dock `position()` and re-pins always-on-top), and
+`panel_close`. The page keeps an `expanded` toggle in sync (reset on each fresh meeting, since
+`panel::show` always re-docks) and, when expanded, constrains every section to a 720px column so lines
+stay at a readable measure instead of running the full monitor width.
+
+**In-app Notetaker list, redesigned.** The past-meetings list was a flat stack of `.panel` rows with a
+cramped mono metadata string. It's now grouped by day — "Today" / "Yesterday" / "Tue, Oct 13" section
+headers — with clean rows: a rounded icon tile, the title, and a muted `time · duration · words`
+subline. First cut used `bg-secondary` for hover/selected, which is near-white in the light theme
+(`--secondary` is 96% L) so the states were nearly invisible there; switched to `bg-muted` (real
+contrast against the card in both themes) with an inset `primary/0.35` ring for the selected row, and a
+delete action that reveals on hover. This follows the impeccable skill's Operate guidance (earned
+familiarity, consistent vocabulary, theme the states) and the craft floor's "theme what the browser
+would leave default."
+
+Scope was UI only — no capture/transcription/summary changes, no cloud. `tsc` clean, `cargo check`
+clean (only the pre-existing `optimize.rs` dead-code warnings), both verified in `/preview`. On branch
+`feat/notetaker-mvp-and-notepad-fix` / PR #5. The v2.1.0 release draft stays **held** until the owner
+signs off on-device (the window resize paths only exercise in the real Tauri app).
+
+Note: `docs/DESIGN.md` still describes the original "instrument" direction and explicitly rules out a
+Wispr-like look, glass, and a serif display face — all of which the Notetaker work has deliberately
+adopted over this arc at the owner's repeated direction. DESIGN.md is now stale against what ships and
+should be reconciled in a dedicated pass (`/impeccable document` or a manual rewrite), not silently as
+a side effect of feature work.
+
+### 2026-10-16 — Notetaker speaker intelligence: live "You"/guest + name resolution (Layers A+C)
+
+The owner wants the Notetaker to understand *who* is speaking and name them — **mid-meeting**, and
+better than Wispr. They pasted a real Wispr transcript (a Lenny/Teresa podcast) which, usefully,
+showed both Wispr's method and its failures: it names by **address detection applied retroactively**
+to voice clusters ("Theresa, thank you…" → that cluster is Teresa), leaves an evidence-less line as
+"Speaker 3", and figures speakers out **online** (the recording was just cut short). Its failures —
+a duplicated paragraph, a wrong "Thanks, William" name surfaced anyway, an invented third speaker —
+set our bar.
+
+**The unfair advantage we found:** we capture the mic and the system/loopback audio in **two separate
+buffers** and only mix them to transcribe. So "You vs a guest" falls straight out of which channel
+carries the energy — near-perfect on headphones, free, no model. Wispr can't do that from its single
+mixed stream. We only have to acoustically diarize the *guest* side.
+
+**Built this pass (design doc committed first, then TDD):** a pure `diarize` engine — Layer A
+`attribute_channel` (channel RMS → You/Guest/Mixed), Layer B `OnlineClusterer` (cosine centroids +
+agglomerative self-correction; tested with synthetic vectors), Layer C `resolve_speaker_names`
+(self-intro names the speaker; address/intro names the addressee; confidence-gated ≥2 consistent
+votes; spelling normalised via the existing bounded Levenshtein). 15 unit tests, including a fixture
+from the owner's real transcript that resolves Teresa + Lenny, **rejects "William"**, and leaves the
+stray line unnamed. Then wired live: migration 014 (speakers table + segment cluster), per-window
+channel attribution in `process_tick`, name re-resolution every window in the chunker with a
+`meeting-speakers` event that relabels clusters live and retroactively, `rename_speaker` (user edits
+win), and a shared `src/lib/speakers.ts` that both the panel and the in-app view use to render the
+transcript grouped by speaker with coloured, editable name headings. 120 Rust tests, tsc clean,
+verified in /preview.
+
+**Honesty / status:** Layers A (You/guest) and C (names) are live; **guests are one cluster** until
+Layer B's **speaker-embedding model** (a download, on-device verification) splits them into Speaker
+1/2/3. Layer D (word-by-word streaming) and resume-a-past-meeting remain. The channel-split "You",
+the periodic self-correction, and never surfacing a low-confidence name are our own ideas — nothing
+copied from Wispr. No cloud. Also fixed: the reused panel window now loads fresh per meeting instead
+of carrying the previous transcript. All on branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
+
+### 2026-10-16 — Notetaker speaker intelligence: Layer B (guest split) + Resume; Layer D scoped honestly
+
+Continued end-to-end from Layers A+C. **Layer B (guest diarization)** shipped: `embedding.rs` wraps
+sherpa-rs `EmbeddingExtractor` with the `nemo_en_titanet_small` model (~40 MB, verified the URL at
+sherpa's "speaker-recongition-models" release — note sherpa's own misspelled tag), downloaded opt-in
+like the ASR models (an "Enable / Separate speakers" banner, never automatic). The chunker fingerprints
+each guest window, the already-tested `OnlineClusterer` assigns Speaker 1/2/3, and every ~30 s it
+re-clusters to self-correct drift — emitting a `meeting-remap` event (UI rewrites live line clusters)
+and remapping stored segments in the DB (via a temp offset to avoid mid-pass collisions). When the
+model isn't present, guests stay one cluster (A/C unchanged). **Resume** shipped: `start_meeting` took
+an optional `resume_id` that continues an existing meeting — offsets continue past the prior duration,
+naming turns are seeded from the stored transcript, guest numbering continues above the highest
+existing speaker, `finish_meeting` won't shrink a resumed duration, and recluster is disabled on resume
+(the clusterer holds only this session's voices). A Resume button sits in the meeting detail.
+
+**Layer D (word-by-word streaming) — deliberately not built this session, and why.** Checked the
+binding: sherpa-rs 0.6.8 has only *offline* recognizers (`zipformer`/`transducer` call
+`SherpaOnnxCreateOfflineStream`); the only online-stream FFI it surfaces is inside keyword-spot and the
+speaker embedder. True streaming would mean hand-written unsafe `sherpa-rs-sys` FFI for an online
+transducer (`SherpaOnnxCreateOnlineRecognizer` + `IsOnlineStreamReady`/`DecodeOnlineStream`/endpoint),
+a new streaming model download, and a reworked capture loop with partial-result finalization + UI —
+none verifiable in the sandbox. CLAUDE.md is explicit ("verify by running, not reading"; "do not
+rewrite the proven audio path on a guess"), so shipping a large unverified unsafe-FFI pipeline change
+would be wrong. Layer D is scoped for a focused session with the hardware in the loop.
+
+Verification: `diarize` has 15 unit tests (incl. the real-transcript fixture); 120 Rust tests pass;
+tsc clean; Layer B/Resume UI verified in /preview. The embedding extraction and any future streaming
+need on-device confirmation. No cloud anywhere. Branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
+
+### 2026-10-16 — Layer D streaming engine built + FFI verified by running; selected-row highlight fix
+
+Owner asked to continue the pending work. Took Layer D (word-by-word streaming) from "scoped" to
+"engine built and the scary part proven". sherpa-rs 0.6.8 has only offline recognizers, so streaming
+needs the raw `sherpa-rs-sys` online API — which turned out fully present (`CreateOnlineRecognizer`,
+`AcceptWaveform`, `IsOnlineStreamReady`/`DecodeOnlineStream`, `GetOnlineStreamResult`, endpoint/reset)
+with simple config structs (OnlineTransducerModelConfig = encoder/decoder/joiner; OnlineModelConfig;
+OnlineRecognizerConfig). Built `streaming.rs` mirroring the proven `nemo_ctc.rs` raw-FFI pattern, using
+the small `sherpa-onnx-streaming-zipformer-en-20M` model (~45 MB, opt-in 4-file download).
+
+**Crucially, de-risked the unsafe FFI by running it** rather than trusting the code: downloaded the
+real model to scratch and an `#[ignore]` smoke test loaded it and decoded 1 s of silence to `""`
+without crashing — proving the struct layouts and call sequence are right on this machine. (One fix the
+run caught: the result destructor is `SherpaOnnxDestroyOnlineRecognizerResult`, not
+`...OnlineStreamResult`.) Added opt-in download/status commands + ipc.
+
+Deliberately did **not** ship a user-facing streaming toggle or wire the live loop: a download button
+that changed nothing would violate "never claim more than the code does", and the live partial loop's
+behaviour (feed cadence, endpoint rules, partial UI) genuinely needs real speech to tune. So Layer D
+now = verified engine + download plumbing; remaining = the live partial-emission wiring, lower-risk now
+the FFI is proven. Also fixed the selected-meeting highlight (was `bg-muted` warm grey, a grey slab on
+the navy glass theme) to tint from `--primary` so it matches every theme. 120 tests + 2 ignored
+(notepad E2E, streaming smoke); tsc clean. Branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
+
+### 2026-10-16 — Layer D fully wired: live streaming loop + partial UI, verified on real speech
+
+Took Layer D from "engine built" to "live and proven". Gave `StreamingRecognizer` a persistent online
+stream with `accept`/`poll`/`reset` (replacing the one-shot decode), so audio is fed continuously and
+the hypothesis grows word by word with endpoint detection. Added a streaming loop in `meeting.rs`: when
+the streaming model is downloaded, the chunker feeds mixed audio every ~300 ms, emits `meeting-partial`
+(the growing text, with a live speaker guess from the louder channel), and on a speech endpoint
+finalizes the utterance through the same path as the chunked loop — channel/embedding attribution,
+save, name re-resolution, clear partial. The proven chunked offline path is left exactly as-is and runs
+when streaming is off (opt-in by download). Factored `embed_guest` + `sync_speakers` so both loops
+share the finalize logic. UI: a muted partial line with a pulsing caret under the right speaker in the
+panel and the in-app live transcript, and an honest opt-in "Word-by-word transcript" banner (only
+shipped now the loop actually uses it).
+
+**Verified by running, not reading.** Beyond the load/decode smoke test, added one that decodes a real
+speech wav in ~300 ms chunks exactly like the live loop and asserts it yields words — it returned "THE
+YELLOW LAMPS WOULD LIGHT UP HERE AND THERE THE SQUALID QUARTER OF THE BRAFFLEL". So the FFI, the
+persistent-stream API, and the accept/poll/endpoint/reset flow are all confirmed on this machine. The
+20M model is light (all-caps, "brothels"→"BRAFFLEL") — honestly labeled "a lighter model"; a larger
+streaming model is a one-line swap if accuracy matters more than size.
+
+Net: all four layers (A You/guest, B guest split, C names, D streaming) plus Resume are built, with the
+unverifiable-in-sandbox pieces (B embedding, D streaming) now each proven by running against real
+models/audio. Remaining is on-device accuracy/latency tuning and an optional punctuation/casing pass on
+streaming output. tsc clean; 120 tests + 3 ignored (notepad E2E, 2 streaming smokes). No cloud. PR #5.
+
+### 2026-10-16 — v2.2.0 release cut (Notetaker + speaker intelligence); full-page meeting detail; prompt-opt investigated
+
+Release-planning pass. Owner decided: version **2.2.0**, **publish as Latest**, **merge PR #5 to
+master**, **defer prompt optimization**. Bumped 2.1.0→2.2.0 across the four synced files; updated the
+README (badge, a prominent "New in v2.2.0 — Notetaker" callout, a Notetaker feature bullet, 2.2.0 asset
+names, fixed the stale "starts as a draft" line); wrote `docs/RELEASE-NOTES-v2.2.0.md`. The stale v2.1.0
+tag + draft release (cut at the panel-only commit, never published) are superseded — deleted in favour
+of 2.2.0. Release ships via `release.yml` (tag push → Windows/macOS/Linux built with
+`--features moonshine` → draft release), published as Latest once CI is green. Ran the full suite before
+cutting: 120 tests + 3 ignored, tsc clean.
+
+**Full-page meeting detail.** The owner pointed out (with Wispr screenshots) that opening a note should
+take over the page, not render inline under the list — "not a scalable solution". Fixed: the list
+(header, record control, add-on banners, library) renders only when nothing is selected; selecting a
+meeting shows a full-page detail with a back button ("All meetings"), a large serif title, and the
+notes/summary/transcript below. tsc clean. (Couldn't screenshot — the preview pane was stuck at ~85 px
+tall this session — but it's a straightforward conditional render.)
+
+**Prompt optimization — investigated, found NOT working, planned.** `optimize_text` echoes the input
+and the `prompt` feature isn't in the shipped build, so the feature does nothing today. PR #3 has the
+real `llama-cpp-2` 0.1.150 integration but is CONFLICTING with master and was never compile-verified
+(llama.cpp builds from source; needs CI + a GGUF + on-device run). Wrote the honest plan to make it
+work — rebase PR #3, prove the link via `test-build.yml` on MSVC, wire a Qwen GGUF, owner-verify on
+device, ship behind the opt-in `prompt` feature — at
+`docs/superpowers/plans/2026-10-16-prompt-optimization-make-it-work.md`. Noted the overlay
+repaint-after-sleep fix in PR #3 as a low-risk extract worth doing sooner. Kept it out of 2.2.0.
