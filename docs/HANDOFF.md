@@ -42,12 +42,20 @@ was **de-risked by running it**: an `#[ignore]` smoke test (`streaming_ffi_smoke
 model on this machine and decoded silence to `""` without crashing — so the config structs and call
 sequence are correct (run: download the 4 files into `<models>/streaming-zipformer-en-20M`, then
 `cargo test --features moonshine streaming_ffi_smoke -- --ignored`). Opt-in download + status commands
-and ipc wrappers are in. **Not yet wired into the live meeting loop**, so no user-facing "word-by-word"
-claim ships (per "never claim more than the code does"). **Remaining:** the live partial-emission loop
-(a persistent stream fed frequently + a partial transcript line + endpoint/latency tuning) — lower
-risk now the FFI is proven, but best tuned on-device with real speech. **Also fixed:** the
-selected-meeting highlight now tints from the accent (`--primary`) so it matches light/dark/glass
-instead of a grey slab on the navy theme. **Also
+and ipc wrappers are in. **Now fully wired and verified end to end.**
+`StreamingRecognizer` holds a persistent online stream (`accept`/`poll`/`reset`); when the streaming
+model is downloaded the chunker runs a **streaming loop** at ~300 ms cadence that emits a
+`meeting-partial` event (the growing hypothesis) and, on a speech **endpoint**, finalizes the
+utterance through the normal speaker-attribution + naming flow. The proven chunked offline path is
+untouched and runs when streaming is off. UI: a growing **partial line** (muted, pulsing caret, under
+the right speaker) in the panel and the in-app live transcript, plus an opt-in "Word-by-word
+transcript" download banner. **Verified by running:** a smoke test decodes a real speech wav in
+live-style chunks to actual words ("THE YELLOW LAMPS WOULD LIGHT UP HERE AND THERE…"), proving the
+FFI + the accept/poll/endpoint/reset flow the live loop uses. The 20M model is light (all-caps, a bit
+less accurate — labeled as such); swapping in a larger streaming model later is a one-line model
+change. **So all four layers (A/B/C/D) + Resume are built; remaining polish is on-device accuracy/
+latency tuning and optionally a punctuation/casing pass on streaming output.** **Also fixed:** the
+selected-meeting highlight now tints from the accent (`--primary`) so it matches light/dark/glass. **Also
 fixed this session:** the panel now **loads fresh for each meeting** (the reused panel window kept the
 previous meeting's live transcript — reset on new meeting + drop stray cross-meeting segment events).
 No cloud added anywhere. On PR #5; v2.1.0 release draft **held** pending on-device sign-off.

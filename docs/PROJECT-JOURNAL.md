@@ -754,3 +754,29 @@ now = verified engine + download plumbing; remaining = the live partial-emission
 the FFI is proven. Also fixed the selected-meeting highlight (was `bg-muted` warm grey, a grey slab on
 the navy glass theme) to tint from `--primary` so it matches every theme. 120 tests + 2 ignored
 (notepad E2E, streaming smoke); tsc clean. Branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
+
+### 2026-10-16 — Layer D fully wired: live streaming loop + partial UI, verified on real speech
+
+Took Layer D from "engine built" to "live and proven". Gave `StreamingRecognizer` a persistent online
+stream with `accept`/`poll`/`reset` (replacing the one-shot decode), so audio is fed continuously and
+the hypothesis grows word by word with endpoint detection. Added a streaming loop in `meeting.rs`: when
+the streaming model is downloaded, the chunker feeds mixed audio every ~300 ms, emits `meeting-partial`
+(the growing text, with a live speaker guess from the louder channel), and on a speech endpoint
+finalizes the utterance through the same path as the chunked loop — channel/embedding attribution,
+save, name re-resolution, clear partial. The proven chunked offline path is left exactly as-is and runs
+when streaming is off (opt-in by download). Factored `embed_guest` + `sync_speakers` so both loops
+share the finalize logic. UI: a muted partial line with a pulsing caret under the right speaker in the
+panel and the in-app live transcript, and an honest opt-in "Word-by-word transcript" banner (only
+shipped now the loop actually uses it).
+
+**Verified by running, not reading.** Beyond the load/decode smoke test, added one that decodes a real
+speech wav in ~300 ms chunks exactly like the live loop and asserts it yields words — it returned "THE
+YELLOW LAMPS WOULD LIGHT UP HERE AND THERE THE SQUALID QUARTER OF THE BRAFFLEL". So the FFI, the
+persistent-stream API, and the accept/poll/endpoint/reset flow are all confirmed on this machine. The
+20M model is light (all-caps, "brothels"→"BRAFFLEL") — honestly labeled "a lighter model"; a larger
+streaming model is a one-line swap if accuracy matters more than size.
+
+Net: all four layers (A You/guest, B guest split, C names, D streaming) plus Resume are built, with the
+unverifiable-in-sandbox pieces (B embedding, D streaming) now each proven by running against real
+models/audio. Remaining is on-device accuracy/latency tuning and an optional punctuation/casing pass on
+streaming output. tsc clean; 120 tests + 3 ignored (notepad E2E, 2 streaming smokes). No cloud. PR #5.
