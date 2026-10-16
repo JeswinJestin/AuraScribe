@@ -8,6 +8,7 @@ mod cleanup;
 mod commands;
 mod db;
 mod denoise;
+mod diarize;
 mod engine;
 mod expand;
 mod hotkey;

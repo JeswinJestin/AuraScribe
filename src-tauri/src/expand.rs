@@ -209,7 +209,7 @@ fn fuzzy_correct(text: &str, dictionary: &[DictionaryRow]) -> String {
 
 /// Levenshtein distance, early-exiting once it provably exceeds `max` (returns `None` then). Keeps
 /// the fuzzy pass cheap: it only ever runs the full DP on tokens already close in length.
-fn levenshtein_bounded(a: &str, b: &str, max: usize) -> Option<usize> {
+pub(crate) fn levenshtein_bounded(a: &str, b: &str, max: usize) -> Option<usize> {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     if a.len().abs_diff(b.len()) > max {
