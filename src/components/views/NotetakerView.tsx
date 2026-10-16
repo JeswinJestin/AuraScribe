@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Circle, Square, Trash2, FileText, Sparkles, Pencil } from 'lucide-react'
+import { Circle, Square, Trash2, FileText, Sparkles, Pencil, ArrowLeft } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { Meeting, MeetingDetail, Summary, Speaker } from '@/lib/ipc'
 import { groupTurns, labelMap, speakerColor, type SpeakerLine } from '@/lib/speakers'
@@ -371,6 +371,8 @@ export function NotetakerView() {
 
   return (
     <div>
+      {!selected && (
+        <>
       <PageHeader
         title="Notetaker"
         description="Record a meeting and get a transcript — all on your device. Captures what you hear in the call plus your mic. No cloud, no account."
@@ -532,7 +534,8 @@ export function NotetakerView() {
               </h3>
               <div className="flex flex-col">
                 {group.items.map((m) => {
-                  const isOpen = selected?.meeting.id === m.id
+                  // On the list page nothing is "open" — selecting navigates to the full-page detail.
+                  const isOpen = false
                   return (
                     <div
                       key={m.id}
@@ -578,15 +581,25 @@ export function NotetakerView() {
           ))}
         </div>
       )}
+        </>
+      )}
 
-      {/* Transcript of the selected meeting */}
+      {/* Full-page meeting detail (opens over the list, like Wispr — a scalable page, not inline). */}
       {selected && (
-        <div className="mt-4 rounded-[14px] border bg-card p-[18px]">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <button
+            onClick={() => setSelected(null)}
+            className="btn-ghost btn-sm -ml-1.5 mb-4 gap-1.5"
+            title="Back to all meetings"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            All meetings
+          </button>
+          <div className="mb-5 flex items-start justify-between gap-3">
             {editingTitle ? (
               <input
                 autoFocus
-                className="input min-w-0 flex-1 text-sm"
+                className="input min-w-0 flex-1 font-display text-[26px] font-medium"
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onBlur={saveTitle}
@@ -601,14 +614,16 @@ export function NotetakerView() {
                   setTitleDraft(selected.meeting.title)
                   setEditingTitle(true)
                 }}
-                className="group flex min-w-0 items-center gap-1.5 text-left"
+                className="group flex min-w-0 items-start gap-2 text-left"
                 title="Rename meeting"
               >
-                <h3 className="min-w-0 truncate text-sm font-medium">{selected.meeting.title}</h3>
-                <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
+                <h1 className="min-w-0 font-display text-[26px] font-medium leading-tight tracking-tight">
+                  {selected.meeting.title}
+                </h1>
+                <Pencil className="mt-2 h-3.5 w-3.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
               </button>
             )}
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2 pt-1">
               <button
                 onClick={resume}
                 disabled={busy || recording}
@@ -628,9 +643,6 @@ export function NotetakerView() {
                   {summarizing ? 'Summarizing…' : 'Summarize'}
                 </button>
               )}
-              <button onClick={() => setSelected(null)} className="btn-ghost btn-sm">
-                Close
-              </button>
             </div>
           </div>
 
