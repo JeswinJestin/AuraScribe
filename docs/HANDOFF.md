@@ -6,7 +6,32 @@
 > and append a dated entry to `docs/PROJECT-JOURNAL.md` for any **major** change — see
 > `docs/MAINTAINING-DOCS.md` for the rules.
 
-**Last updated:** 2026-10-16 (**Notetaker panel window chrome + premium list redesign** — the
+**Last updated:** 2026-10-16 (**Notetaker speaker intelligence — live speaker labels + names
+(Layers A + C), plus the panel chrome/list work below**. The Notetaker now understands *who* is
+speaking and names them, **mid-meeting**, more capably than Wispr. Design:
+`docs/superpowers/specs/2026-10-16-notetaker-speaker-intelligence-design.md`. **What shipped this
+pass:** (1) a pure, 15-test **`diarize` engine** — Layer A `attribute_channel` ("You" vs guest
+straight from our *separate* mic/loopback buffers — near-perfect on headphones, zero model), Layer B
+`OnlineClusterer` (cosine centroids + agglomerative self-correction; the maths is tested, the
+embedding extractor it consumes lands later on-device), and Layer C `resolve_speaker_names`
+(address/intro/self-intro detection, confidence-gated, spelling-normalised). A fixture built from the
+owner's **real pasted Wispr transcript** proves it resolves Teresa + Lenny, **rejects the one-off
+"William" mis-hearing**, and leaves the lone stray line unnamed — i.e. it avoids the exact mislabel
+Wispr itself produced. (2) **Wired live**: migration `014_meeting_speakers.sql` (speakers table +
+`meeting_segments.speaker_cluster`); `process_tick` attributes each window by channel RMS; the chunker
+re-resolves names every window and emits a `meeting-speakers` event so the UI relabels a cluster
+**live and retroactively** ("Speaker 1" → "Teresa"); `get_meeting` returns speakers; `rename_speaker`
+command (user edits win). (3) **UI**: `src/lib/speakers.ts` shared turn-grouping + theme-aware speaker
+colours; the panel and in-app view render the transcript **grouped by speaker** — coloured, editable
+name headings, grouped bubbles, an "N speakers" chip — live and on review. **120 Rust tests pass, tsc
+clean, verified in /preview** (You + a named guest, grouped/coloured/editable). **Status of the four
+layers:** A (You/guest) + C (names) are **live**; guests are a single cluster until **Layer B**'s
+on-device speaker-embedding model splits them into Speaker 1/2/3 (next, needs hardware verification);
+**Layer D** (word-by-word streaming) and **resume-a-past-meeting** are the remaining goals. **Also
+fixed this session:** the panel now **loads fresh for each meeting** (the reused panel window kept the
+previous meeting's live transcript — reset on new meeting + drop stray cross-meeting segment events).
+No cloud added anywhere. On PR #5; v2.1.0 release draft **held** pending on-device sign-off.
+**Prior same-day — Notetaker panel window chrome + premium list redesign** — the
 floating panel now has real window chrome top-right: **Expand** (⤢) grows it to a large centered
 reading window, **restore** (the "small window" icon) docks it back to its default full-height
 right-edge size, **Minimize**, and **Close** (hides the panel and brings the main app window back —

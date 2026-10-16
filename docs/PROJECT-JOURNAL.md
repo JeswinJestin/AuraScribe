@@ -666,3 +666,38 @@ Wispr-like look, glass, and a serif display face — all of which the Notetaker 
 adopted over this arc at the owner's repeated direction. DESIGN.md is now stale against what ships and
 should be reconciled in a dedicated pass (`/impeccable document` or a manual rewrite), not silently as
 a side effect of feature work.
+
+### 2026-10-16 — Notetaker speaker intelligence: live "You"/guest + name resolution (Layers A+C)
+
+The owner wants the Notetaker to understand *who* is speaking and name them — **mid-meeting**, and
+better than Wispr. They pasted a real Wispr transcript (a Lenny/Teresa podcast) which, usefully,
+showed both Wispr's method and its failures: it names by **address detection applied retroactively**
+to voice clusters ("Theresa, thank you…" → that cluster is Teresa), leaves an evidence-less line as
+"Speaker 3", and figures speakers out **online** (the recording was just cut short). Its failures —
+a duplicated paragraph, a wrong "Thanks, William" name surfaced anyway, an invented third speaker —
+set our bar.
+
+**The unfair advantage we found:** we capture the mic and the system/loopback audio in **two separate
+buffers** and only mix them to transcribe. So "You vs a guest" falls straight out of which channel
+carries the energy — near-perfect on headphones, free, no model. Wispr can't do that from its single
+mixed stream. We only have to acoustically diarize the *guest* side.
+
+**Built this pass (design doc committed first, then TDD):** a pure `diarize` engine — Layer A
+`attribute_channel` (channel RMS → You/Guest/Mixed), Layer B `OnlineClusterer` (cosine centroids +
+agglomerative self-correction; tested with synthetic vectors), Layer C `resolve_speaker_names`
+(self-intro names the speaker; address/intro names the addressee; confidence-gated ≥2 consistent
+votes; spelling normalised via the existing bounded Levenshtein). 15 unit tests, including a fixture
+from the owner's real transcript that resolves Teresa + Lenny, **rejects "William"**, and leaves the
+stray line unnamed. Then wired live: migration 014 (speakers table + segment cluster), per-window
+channel attribution in `process_tick`, name re-resolution every window in the chunker with a
+`meeting-speakers` event that relabels clusters live and retroactively, `rename_speaker` (user edits
+win), and a shared `src/lib/speakers.ts` that both the panel and the in-app view use to render the
+transcript grouped by speaker with coloured, editable name headings. 120 Rust tests, tsc clean,
+verified in /preview.
+
+**Honesty / status:** Layers A (You/guest) and C (names) are live; **guests are one cluster** until
+Layer B's **speaker-embedding model** (a download, on-device verification) splits them into Speaker
+1/2/3. Layer D (word-by-word streaming) and resume-a-past-meeting remain. The channel-split "You",
+the periodic self-correction, and never surfacing a low-confidence name are our own ideas — nothing
+copied from Wispr. No cloud. Also fixed: the reused panel window now loads fresh per meeting instead
+of carrying the previous transcript. All on branch `feat/notetaker-mvp-and-notepad-fix` / PR #5.
